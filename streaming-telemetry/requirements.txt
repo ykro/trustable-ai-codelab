@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+sse-starlette
+pyserial
+pyserial-asyncio
+pydantic
+python-dotenv
+pynmea2
