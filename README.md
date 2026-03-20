@@ -13,11 +13,14 @@
 	- The Google docs source of those MD files are in the shared folder
 
 - Steps:
-Introduction and Overview
-Project Setup
-Virtual Racetrack App
-Building the Reasoning Path
-Building the Reflexive Path
-Finetuning the Model
-Challenges
-Conclusion
+1. Overview
+2. What You Will Need
+3. Why Trustable AI Matters
+4. Understanding High-Velocity AI and Split-Brain Architecture
+5. Build the Telemetry Stream
+6. Prepare Telemetry for AI Reasoning
+7. Add Guardrails and Encoded Human Expertise
+8. Design the Coaching Persona and User Experience
+9. Review the End-to-End Architecture
+10. Challenges
+11. Wrap Up and Next Steps
