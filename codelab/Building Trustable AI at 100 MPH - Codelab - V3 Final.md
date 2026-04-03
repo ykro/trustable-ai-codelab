@@ -90,11 +90,11 @@ Racing Car Telemetry Data
 
 ### Naive AI response
 
-“Stay aggressive on the throttle and carry your speed into Turn 1”
+	“Stay aggressive on the throttle and carry your speed into Turn 1”
 
 ### Trust-aware response
 
-“Rear grip is low at Turn 1 entry. Reduce your throttle slightly and prioritize a stable corner entry”
+	“Rear grip is low at Turn 1 entry. Reduce your throttle slightly and prioritize a stable corner entry”
 
 Notice the difference?  
 
@@ -263,7 +263,7 @@ gcloud run deploy streaming-telemetry-server \
 The telemetry server is now emitting simulated telemetry data using Server-Sent-Events (SSE) at an endpoint of the form :
 
 ```
-service-URL/events		// service-URL - last line displayed by "deploy"
+service-URL/events		// service-URL - the last line displayed by "deploy"
 ```
 
 ```md
@@ -353,7 +353,7 @@ Now, let’s connect the application to the telemetry server.   In the applicati
 Enter the specific URL of your cloud-based telemetry server (Step 5\) in the text field that says “`SSE URL or .txt file path`”.  Our SSE URL was of the form:
 
 ```
-[**`https://streaming-telemetry-server-${PROJECT_NUMBER}.${REGION}.run.app/events`](https://streaming-telemetry-server-${PROJECT_NUMBER}.${REGION}.run.app/events)**
+https://streaming-telemetry-server-${PROJECT_NUMBER}.${REGION}.run.app/events
 ```
 
 Once you have entered the telemetry server endpoint URL, click on “Connect” (on the right of the text field). Don’t forget the “events” at the end of the URL.
@@ -385,7 +385,6 @@ This is an important step in building trustable AI. The quality of the response 
 Let’s now explore the specific data for racing cars.  We can experiment by changing specific values in the application, reloading it, and observing the result.
 
 `../src/services/telemetryStreamService.ts   near line 180`
-
 ```ts
 
 // Clamp G-forces
@@ -453,7 +452,6 @@ Let’s investigate how domain expertise is added to our application.
 An LLM is typically not trained in racing or in the physics of race car performance. If our application did include that domain expertise, users could place greater trust in its guidance.  That guidance comes from rules based on human expertise, in other words, a **domain expertise layer.**
 
 `../src/utils/coachingKnowledge.ts   near line 115`
-
 ```ts
 ...
 export const RACING_PHYSICS_KNOWLEDGE = `
