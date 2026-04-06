@@ -60,7 +60,7 @@ You should have:
 
 Gemini is Google's AI model built on a foundation of state-of-the-art reasoning that brings any idea to life. It's a great model for multimodal understanding and agentic and vibe coding.
 
-![Gemini](gemini.jpeg)
+![Gemini](img/gemini.jpeg)
 
 ## Obtaining Credits to Use Google Cloud
 
@@ -112,7 +112,7 @@ Some AI systems need very different kinds of behavior. They must react quickly t
 
 A modular architecture separates these responsibilities into distinct paths. One path can be reflexive, handling immediate, time-sensitive interpretation of incoming signals. Another path can focus on strategy, supporting higher-level reasoning and more context-aware decision-making.  Other paths target other types of functionality.
 
-![Architectural Diagram](Diagram-v2-orange.png)
+![Architectural Diagram](img/Diagram-v2-orange.png)
 
 Some decisions must happen in real-time.  Some decisions benefit from longer thinking.
 
@@ -167,10 +167,10 @@ In this section, you will create a simple telemetry stream for a virtual race ca
 1. Go to [Google Cloud Console](https://console.cloud.google.com).  
 2. Create a new project for this codelab.  Click on the project dropdown menu at the top.
 
-![Google Cloud Console](5_0.png)
+![Google Cloud Console](img/5_0.png)
 
 When creating a project, it’s a good opportunity to link the billing account:  
-![Link Billing Account](5_1-1.png)
+![Link Billing Account](img/5_1-1.png)
 
 Optionally, if you’ve already created a project, you can open the left panel, click on `Billing`, and check whether the billing account is linked to this `GCP` account.
 
@@ -193,11 +193,11 @@ Keep your API keys out of your source code and never commit them to Git reposito
 ```
 
 4. Click the **Cloud Shell** icon in the top bar (terminal icon) to open a browser-based terminal.  
-   ![Cloud Shell](5_1-d.png)  
+   ![Cloud Shell](img/5_1-d.png)  
      
 5. Wait for the terminal session to start.
 
-![Terminal Session](5_1-e.png)  
+![Terminal Session](img/5_1-e.png)  
 
   
 
@@ -234,7 +234,7 @@ Replace `YOUR_PROJECT_ID` with your actual project ID (or skip the first line if
 
 You can find YOUR\_PROJECT\_ID in the list of Projects
 
-![Terminal Session](5_3.png)  
+![Terminal Session](img/5_3.png)  
 
 ---
 
@@ -273,7 +273,7 @@ The format of the streaming endpoint is of the form: `https://streaming-telemetr
 
 **Test in a browser:** Visit this stream endpoint URL using Chrome.  You should see incoming streamed data in the browser, simulating data emitted by sensors on a racing car.
 
-![Output from the stream endpoint in a browser tab](5s-1.png)
+![Output from the stream endpoint in a browser tab](img/5s-1.png)
 
 You can close the browser tab to terminate the connection.
 
@@ -287,7 +287,7 @@ curl -N service-URL/events		# Replace service-URL with actual deployment endpoin
 
 You should see incoming streamed data in the cloud shell window. 
 
-![Output from the streaming endpoint via the shell command line](5s-2.png)
+![Output from the streaming endpoint via the shell command line](img/5s-2.png)
 
 We will use this telemetry data to simulate the data emitted by sensors in a racing car.  The rest of the codelab will use this data.  You can terminate the curl program by entering CTRL-C in the terminal window.
 
@@ -326,21 +326,21 @@ npm run dev
 > aside positive
 “koru” is a symbol from the [Māori culture](https://en.wikipedia.org/wiki/Koru) in New Zealand.  It represents a new beginning. 
 ```
-!VITE[](vite.png)
+!VITE[](img/vite.png)
 
 In Chrome, open the port on your local machine ([http://localhost:5173](http://localhost:5173) as in the example above). You'll see the landing page for the “AI Motorsport Coaching” application. 
 
-![Your Corner Coach](corner-coach.png)
+![Your Corner Coach](img/corner-coach.png)
 
 Click on the “Open Dashboard \-\>” button.  This will start the UI for the application.
 
-![Koru Dashboard](koru-dashboard.png)
+![Koru Dashboard](img/koru-dashboard.png)
 
 At this point, you have a telemetry server generating simulated race-car telemetry in Google Cloud, and a local web application that can visualize that data and connect to an LLM.  Let’s connect them, and also connect to Gemini LLM services.
 
 In the upper-right corner of the application, click the gear icon (settings).
 
-![Koru Settings](koru-red-arrow.png)
+![Koru Settings](img/koru-red-arrow.png)
 
 Enter your Gemini API key from Step 2\.  This gives you access to Gemini services in Google Cloud.
 
@@ -348,7 +348,7 @@ Click on “Save” so the application remembers your API key.
 
 Now, let’s connect the application to the telemetry server.   In the application dashboard, click on “Live Session”.
 
-![Koru SSE stream input](koru-red-box.png)
+![Koru SSE stream input](img/koru-red-box.png)
 
 Enter the specific URL of your cloud-based telemetry server (Step 5\) in the text field that says “`SSE URL or .txt file path`”.  Our SSE URL was of the form:
 
@@ -362,7 +362,7 @@ You should now see the application visualizing the simulated data\!
 
 If your speaker volume is turned up, you can hear the car racing advice from different types of coaches.  Each coach has a different personality.  Try selecting different coaches to see their varied racing advice and different vocal styles.  If you need to, you can disable the audio by clicking on the speaker icon.
 
-![Example of the application running](koru-run.png)
+![Example of the application running](img/koru-run.png)
 
 Now that we have a working application, let’s explore how we prepared the data for efficient processing by the LLM and how we can add additional features to enhance the trustability of the overall system.
 
@@ -573,7 +573,7 @@ console.log('FRAME', {
 
 Reload the application.  Before we run the application, let’s open the console in Chrome’s DevTools to view this debugging information.
 
-![DevTools console](devtools.png)
+![DevTools console](img/devtools.png)
 
 In the application, enter the telemetry endpoint and click “Connect”.   You can now see the incoming telemetry data.
 
@@ -658,5 +658,5 @@ A trustable AI system often combines:
 
 The racing scenario helped make these ideas tangible, but the same approach can be used anywhere that AI recommendations must be timely, actionable, and dependable.
 
-![Finish Line](finish-line-flags.png)
+![Finish Line](img/finish-line-flags.png)
 
