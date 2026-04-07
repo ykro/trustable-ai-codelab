@@ -303,9 +303,14 @@ But first, let’s build the web front-end to visualize the data.
 * Connect the telemetry server to the racing car web application  
 * View simulated races
 
-At this point, we have a working simulation of the telemetry from a racing car running in the cloud.  Now let’s build the application that runs on your local machine, connects to Google Cloud, and visualizes that data.
+At this point, we have a working simulation of the telemetry from a racing car running in the cloud.  Now let’s build the application that runs on your local machine, connects to Google Cloud, and visualizes that data.  
+Our trustable AI application uses both the power and flexibity of Google Cloud services and local intelligence running in Chrome.
 
-On your local laptop or desktop computer, let’s clone the front-end application from GitHub:
+The streaming telemetry service runs in Google Cloud, but the racing car application runs on your local machine. That means you will need to clone the repository again, this time onto your laptop or desktop computer.
+
+For simplicity, the same repository contains the code for both the streaming server and the racing car application.
+
+Clone the front-end application from GitHub:
 
 ```shell
 git clone https://github.com/ocupop/trustable-ai-codelab.git
