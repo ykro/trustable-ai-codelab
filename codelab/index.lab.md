@@ -1,6 +1,6 @@
 ---
 id: trustable-at-100-mph
-summary: In this codelab, you'll ...
+summary: This codelab walks learners through building a racing coach simulator that combines real-time telemetry, LLM reasoning, and encoded human guidance to demonstrate how to create more trustable AI systems.
 authors: Hemanth HM, Vikram Tiwari, Lynn Langit, Sebastian Gomez, Rabimba Karanjai, Alvaro Huanca Mamani, AJ Mirwani, Peter Lubbers, Cody Nicoll, Frank Greco
 categories: cloud
 tags: cloud
