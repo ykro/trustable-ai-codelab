@@ -162,8 +162,8 @@ In this section, you will create a simple telemetry stream for a virtual race ca
 
 ### 1\. Open Cloud Shell
 
-1. Go to [Google Cloud Console](https://console.cloud.google.com).  
-2. Create a new project for this codelab.  Click on the project dropdown menu at the top.
+A. Go to [Google Cloud Console](https://console.cloud.google.com).  
+B. Create a new project for this codelab.  Click on the project dropdown menu at the top.
 
 ![Google Cloud Console](img/5_0.png)
 
@@ -172,7 +172,7 @@ When creating a project, it’s a good opportunity to link the billing account:
 
 Optionally, if you’ve already created a project, you can open the left panel, click on `Billing`, and check whether the billing account is linked to this `GCP` account.
 
-3. Obtaining a Gemini API key
+C. Obtaining a Gemini API key
 
    Once you have enabled your Google Cloud credits, you need a Gemini API key to access Gemini in Google Cloud.
 
@@ -185,15 +185,13 @@ Optionally, if you’ve already created a project, you can open the left panel, 
    Within Vertex AI Studio, click on “Get API key” in the bottom left corner above “Documentation”. Create an API key for Gemini (it looks like a long string of seemingly random characters).  Save this key in a secure location.  We will use this API key in Step 6 “Build the Racing Car Simulator” to authenticate our access to Gemini in Google Cloud.
 
 
-```md
 > aside positive 
 Keep your API keys out of your source code and never commit them to Git repositories. It is recommended to store them either in environment variables or a secure secrets manager.  Treat API keys like passwords: do not share them in chats, email, screenshots, or logs.  Rotate them regularly. For production systems, you should add monitoring and usage alerts to quickly detect any misuse and immediately revoke compromised keys.
-```
 
-4. Click the **Cloud Shell** icon in the top bar (terminal icon) to open a browser-based terminal.  
+D. Click the **Cloud Shell** icon in the top bar (terminal icon) to open a browser-based terminal.  
    ![Cloud Shell](img/5_1-d.png)  
      
-5. Wait for the terminal session to start.
+E. Wait for the terminal session to start.
 
 ![Terminal Session](img/5_1-e.png)  
 
@@ -264,10 +262,8 @@ The telemetry server is now emitting simulated telemetry data using Server-Sent-
 service-URL/events		// service-URL - the last line displayed by "deploy"
 ```
 
-```md
 > aside positive
 The format of the streaming endpoint is of the form: `https://streaming-telemetry-server-${PROJECT_NUMBER}.${REGION}.run.app/events` Where `$PROJECT_NUMBER` and `$REGION` are set to their values for your specific server.
-```
 
 **Test in a browser:** Visit this stream endpoint URL using Chrome.  You should see incoming streamed data in the browser, simulating data emitted by sensors on a racing car.
 
@@ -304,6 +300,7 @@ But first, let’s build the web front-end to visualize the data.
 * View simulated races
 
 At this point, we have a working simulation of the telemetry from a racing car running in the cloud.  Now let’s build the application that runs on your local machine, connects to Google Cloud, and visualizes that data.  
+
 Our trustable AI application uses both the power and flexibity of Google Cloud services and local intelligence running in Chrome.
 
 The streaming telemetry service runs in Google Cloud, but the racing car application runs on your local machine. That means you will need to clone the repository again, this time onto your laptop or desktop computer.
@@ -325,10 +322,9 @@ npm install
 npm run dev
 ```
 
-```md
 > aside positive
 “koru” is a symbol from the [Māori culture](https://en.wikipedia.org/wiki/Koru) in New Zealand.  It represents a new beginning. 
-```
+
 ![VITE](img/vite.png)
 
 In Chrome, open the port on your local machine ([http://localhost:5173](http://localhost:5173) as in the example above). You'll see the landing page for the “AI Motorsport Coaching” application. 
@@ -541,10 +537,8 @@ Trust is not only about correctness. It is also about delivery. Advice that is t
 
 A trustable system must communicate well. The user experience is part of the trust architecture.
 
-```md
 > aside positive 
 In a production environment, you would typically assign distinct voices to each coach, rather than a single voice that changes its pitch and inflection.  However, using text-to-speech services requires a significant increase in the amount of tokens that flow over the network. If you use a production cloud account, you will be able to hear different types of coaches' voices.
-```
 
 
 ## Review the End-to-End Architecture
@@ -585,24 +579,21 @@ Now, let’s add logging for the reflex path and the strategy path.
 In `../src/services/coachingService.ts` around line 71 before `this.emit()`, add a logging line for the **reflex** path:
 
 ```ts
-console.log('FRAME:reflex', { 
-     speed: frame.speed.toFixed(1), 
-     gLat: frame.gLat.toFixed(2), 
-     brake: frame.brake.toFixed(0) }
+console.log('Reflex', { 
+	action: rule.action, 
+	text, 
+	coach: this.coachId }
 );
-
 ```
 
-And in the same file, around line 138, before `this.emit()`, add a similar logging line for the **strategy** path (let’s add the coaching response `text` returned by the Gemini API):
+And in the same file, around line 287, before `this.emit()`, add a similar logging line for the **strategy** path (let’s add the coaching response `text` returned by the Gemini API):
 
 ```ts
-console.log('FRAME:strategy', { 
-   speed: frame.speed.toFixed(1), 
-   gLat: frame.gLat.toFixed(2), 
-   brake: frame.brake.toFixed(0), 
-   text }
+console.log('Strategy', { 
+	coach: coach.id, 
+	chars: text.length, 
+	preview: text.slice(0, 60) }
 );
-
 ```
 
 Rerun the application. You’ll notice in the console how the telemetry data flows from the source through these paths.  The incoming stream is filtered, sent to the LLM, verified with trusted human expertise, and presented to the user using an appropriate user interface.
@@ -623,10 +614,8 @@ gcloud run services delete streaming-telemetry-server \
 
 Remember to replace `us-central1` with the region you used when deploying, if necessary. Confirm when prompted.
 
-```md
 > aside positive 
 Optional:  Your container images, packages, and related artifacts are stored in the Artifact Registry.  To avoid storage charges for older, unused data, you should remove them to avoid unnecessary charges.  To remove data from the Artifact Registry, use the Cloud Console: Artifact Registry, then select the repository created by the deploy, and then delete the image or the repository.
-```
 
 # 
 
@@ -641,6 +630,13 @@ Suggested challenges
 * Modify the simulation to support rain or reduced traction  
 * Explore how model tuning or [fine-tuning](https://codelabs.developers.google.com/llm-finetuning-supervised) could improve performance  
 * Adapt the architecture for another domain, such as medicine, manufacturing, or logistics
+
+For example, consider these questions when applying the lessons learned in this lab to another domain:
+* What is the equivalent of racing telemetry, ie, continuous data, in another field?
+* Which decisions need to be immediate and which decisions are more strategic?  
+* What type of human expertise would need to be encoded?
+* What would users need to see to believe the system is trustable?
+
 
 These challenges encourage you to think beyond the racing example and recognize the broader design pattern of trustability behind this codelab.
 
