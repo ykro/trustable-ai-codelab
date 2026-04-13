@@ -9,18 +9,46 @@ This system tells you in real time how to adapt and fix it, adjusted to your ski
 
 ## Table of Contents
 
+- [Roadmap](#roadmap)
+  - [Data Reasoning](#data-reasoning)
+  - [Edge / Telemetry](#edge--telemetry)
+  - [AGY Pipeline](#agy-pipeline)
+  - [UX / Frontend](#ux--frontend)
 - [Architecture](#architecture)
   - [Split-Brain Coaching Engine](#split-brain-coaching-engine)
   - [Coach Personas](#coach-personas)
 - [Onboarding](#onboarding)
 - [streaming-telemetry-server](#streaming-telemetry-server)
 - [koru-application](#koru-application)
-- [Roadmap](#roadmap)
-  - [Data Reasoning](#data-reasoning)
-  - [Edge / Telemetry](#edge--telemetry)
-  - [AGY Pipeline](#agy-pipeline)
-  - [UX / Frontend](#ux--frontend)
 - [Tech Stack](#tech-stack)
+
+---
+
+## Roadmap
+
+### Data Reasoning
+
+- [ ] **Timing state machine** — Replace the simple cooldown (`if now - lastTime < 1500ms return`) with a state machine (OPEN → DELIVERING → COOLDOWN → BLACKOUT). Enforce silence during mid-corner and apex phases to prevent cognitive overload. This is a safety feature.
+- [ ] **Priority queue** — Ensure safety-critical messages (BRAKE, OVERSTEER_RECOVERY) always preempt lower-priority coaching (technique tips, compliments). Currently all messages share the same cooldown with no priority ranking.
+- [ ] **Driver model** — Classify driver skill from telemetry signals (input smoothness, lap time consistency, brake point variance) and adjust coaching thresholds per skill level. Currently the system coaches all drivers identically.
+- [ ] **Automate coaching validation** — The Replay page already parses CSV and runs frames through the coaching engine (hot/cold/feedforward). Build automated tests that replay Sonoma CSV files and assert coaching rules trigger at the correct corners and moments.
+
+### Edge / Telemetry
+
+- [ ] **Understand hardware and data sources** — Document exactly what the Racelogic Mini (20Hz GPS) and OBDLink MX (CAN bus) provide on the Pixel 10. Map which TelemetryFrame fields come from hardware vs which are derived by telemetryStreamService (virtual brake/throttle from G-forces, heading from lat/lon deltas).
+- [ ] **Pre-rendered MP3s for safety-critical actions** — Record or source audio clips for BRAKE, OVERSTEER_RECOVERY, COMMIT per coach persona. The audioService already supports AudioContext pre-caching; this needs the actual MP3 files and integration to bypass TTS latency for time-critical calls.
+- [ ] **Bluetooth/USB telemetry bridge** — Define how the Pixel 10 receives data from Racelogic Mini and OBDLink MX. Serial? Bluetooth? WiFi direct? This determines the streaming-telemetry-server deployment model (on-device vs separate).
+
+### AGY Pipeline
+
+- [ ] **Define post-session data schema** — Specify what format coaching events and lap metrics should be stored in (Vertex AI, BigQuery, local JSON) so the coaching engine can export session data for analysis and cross-session learning.
+- [ ] **Build ingestion for coaching events** — Receive per-corner metrics (brake point, apex speed, exit speed), mistake zones, and coaching decisions from each session. Enable post-session analysis and improvement tracking.
+
+### UX / Frontend
+
+- [ ] **Convert to PWA** — Add service worker and manifest for offline support. The hot path and feedforward already run client-side; PWA ensures the UI loads without network at the track.
+- [ ] **Minimal HUD for track use** — Design a signal-light-only visual (green/yellow/red) for in-car use. The driver cannot look at a screen; audio is primary, but a peripheral color signal adds confirmation without distraction.
+- [ ] **Coach persona selection UX** — Evaluate whether mid-session coach switching is useful or distracting. Consider recommending a persona based on driver skill level from the driver model.
 
 ---
 
@@ -246,33 +274,6 @@ koru-application/
                                       CoachPanel (display)
                                       AudioService (TTS)
 ```
-
----
-
-## Roadmap
-
-### Data Reasoning
-
-- [ ] **Timing state machine** — Replace the simple cooldown (`if now - lastTime < 1500ms return`) with a state machine (OPEN → DELIVERING → COOLDOWN → BLACKOUT). Enforce silence during mid-corner and apex phases to prevent cognitive overload. This is a safety feature.
-- [ ] **Priority queue** — Ensure safety-critical messages (BRAKE, OVERSTEER_RECOVERY) always preempt lower-priority coaching (technique tips, compliments). Currently all messages share the same cooldown with no priority ranking.
-- [ ] **Driver model** — Classify driver skill from telemetry signals (input smoothness, lap time consistency, brake point variance) and adjust coaching thresholds per skill level. Currently the system coaches all drivers identically.
-- [ ] **Automate coaching validation** — The Replay page already parses CSV and runs frames through the coaching engine (hot/cold/feedforward). Build automated tests that replay Sonoma CSV files and assert coaching rules trigger at the correct corners and moments.
-### Edge / Telemetry
-
-- [ ] **Understand hardware and data sources** — Document exactly what the Racelogic Mini (20Hz GPS) and OBDLink MX (CAN bus) provide on the Pixel 10. Map which TelemetryFrame fields come from hardware vs which are derived by telemetryStreamService (virtual brake/throttle from G-forces, heading from lat/lon deltas).
-- [ ] **Pre-rendered MP3s for safety-critical actions** — Record or source audio clips for BRAKE, OVERSTEER_RECOVERY, COMMIT per coach persona. The audioService already supports AudioContext pre-caching; this needs the actual MP3 files and integration to bypass TTS latency for time-critical calls.
-- [ ] **Bluetooth/USB telemetry bridge** — Define how the Pixel 10 receives data from Racelogic Mini and OBDLink MX. Serial? Bluetooth? WiFi direct? This determines the streaming-telemetry-server deployment model (on-device vs separate).
-
-### AGY Pipeline
-
-- [ ] **Define post-session data schema** — Specify what format coaching events and lap metrics should be stored in (Vertex AI, BigQuery, local JSON) so the coaching engine can export session data for analysis and cross-session learning.
-- [ ] **Build ingestion for coaching events** — Receive per-corner metrics (brake point, apex speed, exit speed), mistake zones, and coaching decisions from each session. Enable post-session analysis and improvement tracking.
-
-### UX / Frontend
-
-- [ ] **Convert to PWA** — Add service worker and manifest for offline support. The hot path and feedforward already run client-side; PWA ensures the UI loads without network at the track.
-- [ ] **Minimal HUD for track use** — Design a signal-light-only visual (green/yellow/red) for in-car use. The driver cannot look at a screen; audio is primary, but a peripheral color signal adds confirmation without distraction.
-- [ ] **Coach persona selection UX** — Evaluate whether mid-session coach switching is useful or distracting. Consider recommending a persona based on driver skill level from the driver model.
 
 ---
 
