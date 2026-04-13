@@ -257,15 +257,10 @@ koru-application/
 - [ ] **Priority queue** — Ensure safety-critical messages (BRAKE, OVERSTEER_RECOVERY) always preempt lower-priority coaching (technique tips, compliments). Currently all messages share the same cooldown with no priority ranking.
 - [ ] **Driver model** — Classify driver skill from telemetry signals (input smoothness, lap time consistency, brake point variance) and adjust coaching thresholds per skill level. Currently the system coaches all drivers identically.
 - [ ] **Automate coaching validation** — The Replay page already parses CSV and runs frames through the coaching engine (hot/cold/feedforward). Build automated tests that replay Sonoma CSV files and assert coaching rules trigger at the correct corners and moments.
-- [ ] **Corner-specific coaching** — Integrate real coach knowledge (T-Rod session notes, Ross Bentley curriculum) into feedforward path for Sonoma corners. For other tracks, determine whether telemetry-only analysis is sufficient or human coaching input is required.
-- [ ] **Cold path offline fallback** — Pre-compute a coaching lookup table for known tracks (keyed by corner + common mistakes) as offline replacement for Gemini cold path. Evaluate on-device Gemma 4 on Pixel 10 as an alternative.
-- [ ] **Track auto-detection** (post-Sonoma) — Detect corners on unknown tracks from heading change rate alone, without pre-loaded track data. Enables track-agnostic coaching for any track day.
-
 ### Edge / Telemetry
 
 - [ ] **Understand hardware and data sources** — Document exactly what the Racelogic Mini (20Hz GPS) and OBDLink MX (CAN bus) provide on the Pixel 10. Map which TelemetryFrame fields come from hardware vs which are derived by telemetryStreamService (virtual brake/throttle from G-forces, heading from lat/lon deltas).
 - [ ] **Pre-rendered MP3s for safety-critical actions** — Record or source audio clips for BRAKE, OVERSTEER_RECOVERY, COMMIT per coach persona. The audioService already supports AudioContext pre-caching; this needs the actual MP3 files and integration to bypass TTS latency for time-critical calls.
-- [ ] **Evaluate Gemma 4 on Pixel 10** — Determine if Gemma 4 can run on the Pixel 10 with acceptable latency for cold path coaching when there is no network. If not viable, Data Reasoning will pre-compute a lookup table as fallback.
 - [ ] **Bluetooth/USB telemetry bridge** — Define how the Pixel 10 receives data from Racelogic Mini and OBDLink MX. Serial? Bluetooth? WiFi direct? This determines the streaming-telemetry-server deployment model (on-device vs separate).
 
 ### AGY Pipeline
