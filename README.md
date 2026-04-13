@@ -7,6 +7,23 @@ Catalyst tells you what you did wrong with numbers.
 This system tells you in real time how to adapt and fix it, adjusted to your skill level.
 ```
 
+## Table of Contents
+
+- [Architecture](#architecture)
+  - [Split-Brain Coaching Engine](#split-brain-coaching-engine)
+  - [Coach Personas](#coach-personas)
+- [Onboarding](#onboarding)
+- [streaming-telemetry-server](#streaming-telemetry-server)
+- [koru-application](#koru-application)
+- [Roadmap](#roadmap)
+  - [Data Reasoning](#data-reasoning)
+  - [Edge / Telemetry](#edge--telemetry)
+  - [AGY Pipeline](#agy-pipeline)
+  - [UX / Frontend](#ux--frontend)
+- [Tech Stack](#tech-stack)
+
+---
+
 ## Architecture
 
 Two components work together: a **telemetry server** streams GPS/vehicle data over SSE, and a **web application** processes that stream through a split-brain coaching engine that decides what to say and when.
@@ -236,17 +253,20 @@ koru-application/
 
 ### Data Reasoning
 
-- [ ] **Convert to PWA** — Add service worker and manifest for offline support. The hot path and feedforward already run client-side; PWA ensures the UI loads without network at the track.
 - [ ] **Timing state machine** — Replace the simple cooldown (`if now - lastTime < 1500ms return`) with a state machine (OPEN → DELIVERING → COOLDOWN → BLACKOUT). Enforce silence during mid-corner and apex phases to prevent cognitive overload. This is a safety feature.
 - [ ] **Priority queue** — Ensure safety-critical messages (BRAKE, OVERSTEER_RECOVERY) always preempt lower-priority coaching (technique tips, compliments). Currently all messages share the same cooldown with no priority ranking.
 - [ ] **Driver model** — Classify driver skill from telemetry signals (input smoothness, lap time consistency, brake point variance) and adjust coaching thresholds per skill level. Currently the system coaches all drivers identically.
-- [ ] **Validate coaching with real Sonoma data** — The Replay page already parses CSV and runs frames through the coaching engine (hot/cold/feedforward). Run the Sonoma CSV files through replay and verify that coaching rules trigger at the correct moments and corners.
+- [ ] **Automate coaching validation** — The Replay page already parses CSV and runs frames through the coaching engine (hot/cold/feedforward). Build automated tests that replay Sonoma CSV files and assert coaching rules trigger at the correct corners and moments.
+- [ ] **Corner-specific coaching** — Integrate real coach knowledge (T-Rod session notes, Ross Bentley curriculum) into feedforward path for Sonoma corners. For other tracks, determine whether telemetry-only analysis is sufficient or human coaching input is required.
+- [ ] **Cold path offline fallback** — Pre-compute a coaching lookup table for known tracks (keyed by corner + common mistakes) as offline replacement for Gemini cold path. Evaluate on-device Gemma 4 on Pixel 10 as an alternative.
+- [ ] **Track auto-detection** (post-Sonoma) — Detect corners on unknown tracks from heading change rate alone, without pre-loaded track data. Enables track-agnostic coaching for any track day.
 
 ### Edge / Telemetry
 
-- [ ] **Understand hardware and data sources** — Document exactly what the Racelogic Mini (20Hz GPS) and OBDLink MX (CAN bus) provide: which fields come from hardware vs which are derived by telemetryStreamService (virtual brake/throttle from G-forces, heading from lat/lon deltas). Map hardware capabilities to TelemetryFrame fields.
+- [ ] **Understand hardware and data sources** — Document exactly what the Racelogic Mini (20Hz GPS) and OBDLink MX (CAN bus) provide on the Pixel 10. Map which TelemetryFrame fields come from hardware vs which are derived by telemetryStreamService (virtual brake/throttle from G-forces, heading from lat/lon deltas).
 - [ ] **Pre-rendered MP3s for safety-critical actions** — Record or source audio clips for BRAKE, OVERSTEER_RECOVERY, COMMIT per coach persona. The audioService already supports AudioContext pre-caching; this needs the actual MP3 files and integration to bypass TTS latency for time-critical calls.
-- [ ] **Evaluate Gemma on-device** — Determine if Gemma 4 can run on the target edge device with acceptable latency for cold path coaching when there is no network. If not viable, Data Reasoning will pre-compute a lookup table as fallback.
+- [ ] **Evaluate Gemma 4 on Pixel 10** — Determine if Gemma 4 can run on the Pixel 10 with acceptable latency for cold path coaching when there is no network. If not viable, Data Reasoning will pre-compute a lookup table as fallback.
+- [ ] **Bluetooth/USB telemetry bridge** — Define how the Pixel 10 receives data from Racelogic Mini and OBDLink MX. Serial? Bluetooth? WiFi direct? This determines the streaming-telemetry-server deployment model (on-device vs separate).
 
 ### AGY Pipeline
 
@@ -255,6 +275,7 @@ koru-application/
 
 ### UX / Frontend
 
+- [ ] **Convert to PWA** — Add service worker and manifest for offline support. The hot path and feedforward already run client-side; PWA ensures the UI loads without network at the track.
 - [ ] **Minimal HUD for track use** — Design a signal-light-only visual (green/yellow/red) for in-car use. The driver cannot look at a screen; audio is primary, but a peripheral color signal adds confirmation without distraction.
 - [ ] **Coach persona selection UX** — Evaluate whether mid-session coach switching is useful or distracting. Consider recommending a persona based on driver skill level from the driver model.
 
