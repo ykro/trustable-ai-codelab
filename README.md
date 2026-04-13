@@ -232,6 +232,34 @@ koru-application/
 
 ---
 
+## Roadmap
+
+### Data Reasoning
+
+- [ ] **Convert to PWA** — Add service worker and manifest for offline support. The hot path and feedforward already run client-side; PWA ensures the UI loads without network at the track.
+- [ ] **Timing state machine** — Replace the simple cooldown (`if now - lastTime < 1500ms return`) with a state machine (OPEN → DELIVERING → COOLDOWN → BLACKOUT). Enforce silence during mid-corner and apex phases to prevent cognitive overload. This is a safety feature.
+- [ ] **Priority queue** — Ensure safety-critical messages (BRAKE, OVERSTEER_RECOVERY) always preempt lower-priority coaching (technique tips, compliments). Currently all messages share the same cooldown with no priority ranking.
+- [ ] **Driver model** — Classify driver skill from telemetry signals (input smoothness, lap time consistency, brake point variance) and adjust coaching thresholds per skill level. Currently the system coaches all drivers identically.
+- [ ] **Validate coaching with real Sonoma data** — The Replay page already parses CSV and runs frames through the coaching engine (hot/cold/feedforward). Run the Sonoma CSV files through replay and verify that coaching rules trigger at the correct moments and corners.
+
+### Edge / Telemetry
+
+- [ ] **Understand hardware and data sources** — Document exactly what the Racelogic Mini (20Hz GPS) and OBDLink MX (CAN bus) provide: which fields come from hardware vs which are derived by telemetryStreamService (virtual brake/throttle from G-forces, heading from lat/lon deltas). Map hardware capabilities to TelemetryFrame fields.
+- [ ] **Pre-rendered MP3s for safety-critical actions** — Record or source audio clips for BRAKE, OVERSTEER_RECOVERY, COMMIT per coach persona. The audioService already supports AudioContext pre-caching; this needs the actual MP3 files and integration to bypass TTS latency for time-critical calls.
+- [ ] **Evaluate Gemma on-device** — Determine if Gemma 4 can run on the target edge device with acceptable latency for cold path coaching when there is no network. If not viable, Data Reasoning will pre-compute a lookup table as fallback.
+
+### AGY Pipeline
+
+- [ ] **Define post-session data schema** — Specify what format coaching events and lap metrics should be stored in (Vertex AI, BigQuery, local JSON) so the coaching engine can export session data for analysis and cross-session learning.
+- [ ] **Build ingestion for coaching events** — Receive per-corner metrics (brake point, apex speed, exit speed), mistake zones, and coaching decisions from each session. Enable post-session analysis and improvement tracking.
+
+### UX / Frontend
+
+- [ ] **Minimal HUD for track use** — Design a signal-light-only visual (green/yellow/red) for in-car use. The driver cannot look at a screen; audio is primary, but a peripheral color signal adds confirmation without distraction.
+- [ ] **Coach persona selection UX** — Evaluate whether mid-session coach switching is useful or distracting. Consider recommending a persona based on driver skill level from the driver model.
+
+---
+
 ## Tech Stack
 
 | Layer | Technology |
