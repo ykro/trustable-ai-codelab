@@ -1,31 +1,251 @@
-# trustable-ai-codelab
+# Trustable AI Race Coach
 
-# Building Trustable AI at 100 MPH 
+Real-time AI driving coach for track days. Tells you how to adapt and fix mistakes as they happen, adjusted to your skill level.
 
-- Shared Folder (Google Docs): https://drive.google.com/drive/folders/1q-u12zJnC8P5O63uRwfWhbmGDsNXPwed
-- Owner: 
-- Status: DRAFT
-- Last reviewed: 20260217
-- Notes:
-	- This repo contains the code for the Trustable AI codelab
-		- Koru repo - A Racing Coach that implements Trustable AI principles
-		- Streaming Telemetry Server repo - A stream of simulated telemetry data that represents racing car data
-	- Each step of the repo contains the generated MD files for that step
-	- Do not edit the generated index.md files in each Step folder
-	- The Google docs source of those MD files are in the shared folder
-	- Follow the instructions in the codelab to build and run both components of the application.
+```
+Catalyst tells you what you did wrong with numbers.
+This system tells you in real time how to adapt and fix it, adjusted to your skill level.
+```
 
-- Steps:
+## Architecture
 
-1. Overview
-2. What You Will Need
-3. Why Trustable AI Matters
-4. Understanding High-Velocity AI and Split-Brain Architecture
-5. Building a Telemetry Streaming Server
-6. Build the Racing Car Simulator
-7. Prepare Telemetry for AI Reasoning
-8. Add Guardrails and Encoded Human Expertise
-9. Design the Coaching Persona and User Experience
-10. Review the End-to-End Architecture
-11. Challenges
-12. Wrap Up and Next Steps
+Two components work together: a **telemetry server** streams GPS/vehicle data over SSE, and a **web application** processes that stream through a split-brain coaching engine that decides what to say and when.
+
+```
+                         ┌─────────────────────────────────────────────┐
+                         │           koru-application (React)          │
+                         │                                             │
+ ┌───────────────┐  SSE  │  ┌─────────────┐    ┌──────────────────┐   │
+ │  Telemetry    │──────►│  │  Telemetry   │───►│  CoachingService │   │
+ │  Server       │       │  │  Stream      │    │  (Split-Brain)   │   │
+ │  (FastAPI)    │       │  │  Service     │    │                  │   │
+ └───────────────┘       │  └─────────────┘    │  HOT ──► <50ms   │   │
+        ▲                │                      │  COLD ─► Gemini  │   │
+        │                │                      │  FEED ─► Geofence│   │
+ ┌──────┴──────┐         │                      └────────┬─────────┘   │
+ │ GPS Device  │         │                               │             │
+ │ (Racelogic) │         │  ┌──────────┐    ┌────────────▼──────────┐  │
+ │ or Mock CSV │         │  │  Gemini  │    │    Audio Output       │  │
+ └─────────────┘         │  │  Service │    │  (TTS + AudioContext) │  │
+                         │  └──────────┘    └───────────────────────┘  │
+                         │                                             │
+                         │  Pages: Landing │ Dashboard │ Live │ Replay │
+                         └─────────────────────────────────────────────┘
+```
+
+### Split-Brain Coaching Engine
+
+The coaching engine routes decisions through three paths based on urgency:
+
+```
+  TelemetryFrame
+       │
+       ├──► HOT PATH (heuristic rules, <50ms)
+       │    "Trail brake!" "Commit!" "Brake!"
+       │    No cloud round-trip. Fires on threshold violations.
+       │
+       ├──► COLD PATH (Gemini Flash/Pro, 2-5s)
+       │    Multi-frame telemetry analysis with physics context.
+       │    "You're lifting early in T5 — trust the grip through mid-corner."
+       │
+       └──► FEEDFORWARD (geofence triggers, 150m before corner)
+            Corner-specific advice delivered before the maneuver.
+            "T3 right: late apex, brake at the 100m board."
+```
+
+### Coach Personas
+
+Five AI personas with different communication styles. Switch mid-session.
+
+| Coach | Style | Example |
+|-------|-------|---------|
+| **Tony** | Motivational | "Commit! Trust the grip!" |
+| **Rachel** | Technical | "Trail off brake before turn-in. Balance the platform." |
+| **AJ** | Direct | "Brake 5m later." |
+| **Garmin** | Data | "Entry speed: -8 mph vs ideal. +0.3s potential." |
+| **Super AJ** | Adaptive | Switches style per error type |
+
+---
+
+## Onboarding
+
+### Prerequisites
+
+- Node.js 20+
+- Python 3.10+
+- A [Gemini API key](https://aistudio.google.com/apikey) (optional, hot path works without it)
+
+### 1. Start the Telemetry Server
+
+```bash
+cd streaming-telemetry-server
+python3 -m venv venv
+source venv/bin/activate        # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+python ingest.py --mock
+```
+
+The server starts at `http://localhost:8000`. The `--mock` flag replays `SampleStream2024.csv` (Sonoma Raceway data) at 10Hz over SSE.
+
+For live GPS hardware (VK-162 USB dongle):
+
+```bash
+python ingest.py --port /dev/tty.usbserial-XXXX --baud 9600
+```
+
+### 2. Start the Web Application
+
+```bash
+cd koru-application
+npm install
+npm run dev
+```
+
+Open `http://localhost:5175`. Click **Open Dashboard** to enter the app.
+
+### 3. Configure Gemini (optional)
+
+Click the gear icon in the navbar and paste your Gemini API key. This enables:
+- Cold path cloud coaching (Gemini Flash/Pro)
+- Post-session AI lap comparison
+- Google Cloud TTS voice output
+
+The hot path and feedforward path work without an API key.
+
+### 4. Run a Session
+
+| Mode | Steps |
+|------|-------|
+| **Live** | Go to Live > paste SSE endpoint (`http://localhost:8000/events`) > pick a coach > drive |
+| **Replay** | Go to Replay > upload a CSV from your datalogger > scrub with synced charts |
+| **Analysis** | Go to Analysis > upload two CSVs > click Compare Laps for sector-by-sector AI breakdown |
+
+---
+
+## streaming-telemetry-server
+
+Python FastAPI service that streams GPS telemetry over Server-Sent Events (SSE).
+
+```
+streaming-telemetry-server/
+  ingest.py              # FastAPI app: SSE broadcast, mock generator, serial reader, NMEA parser
+  requirements.txt       # fastapi, uvicorn, sse-starlette, pyserial, pynmea2
+  SampleStream2024.csv   # Sonoma Raceway sample data (VBOX format)
+  test_nmea_parsing.py   # NMEA parsing tests
+  Procfile               # Heroku/Railway deployment
+```
+
+### How it works
+
+```
+ ┌────────────────┐         ┌──────────────┐         ┌──────────┐
+ │ Data Source     │         │   ingest.py  │   SSE   │ Clients  │
+ │                 │         │              │ /events │          │
+ │ --mock:         │────────►│  Broadcaster │────────►│ Browser  │
+ │   CSV at 10Hz   │         │  (pub/sub)   │         │ koru-app │
+ │                 │         │              │         │          │
+ │ --port:         │────────►│  NMEA Parser │────────►│ Any SSE  │
+ │   Serial GPS    │         │  or Binary   │         │ client   │
+ └────────────────┘         └──────────────┘         └──────────┘
+```
+
+**Modes:**
+- `--mock` — Replays `SampleStream2024.csv` as GPSD TPV objects at 10Hz. No hardware needed.
+- `--port /dev/ttyXXX --baud 9600` — Reads NMEA sentences from serial GPS (VK-162 tested).
+- `--binary` — Experimental binary protocol mode for VBox devices.
+
+**Endpoints:**
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/events` | GET | SSE stream of GPS data (TPV JSON objects) |
+| `/state` | GET | Current mock mode status |
+| `/mock` | POST | Enable/disable mock data `{"enabled": true}` |
+
+**Environment variables** (`.env`):
+- `PORT` — Server port (default: 8000)
+- `HOST` — Bind address (default: 0.0.0.0)
+
+---
+
+## koru-application
+
+React + TypeScript + Vite web application for real-time coaching visualization and interaction.
+
+```
+koru-application/
+  src/
+    components/
+      CoachPanel.tsx         # Coaching message display and persona selector
+      GaugeCluster.tsx       # Speed, throttle, brake, G-force gauges
+      Navbar.tsx             # Navigation bar with API key settings
+      PlaybackControls.tsx   # Replay scrubber and playback speed
+      TelemetryCharts.tsx    # Recharts-based telemetry visualization
+      TrackMap.tsx           # Canvas track map with car position
+    data/
+      trackData.ts           # Thunderhill East track definition (corners, sectors)
+    hooks/
+      useGeminiCloud.ts      # Gemini API integration hook
+      usePredictiveCoaching.ts  # Mistake zone tracking + 8s lookahead
+      useTTS.ts              # Text-to-speech hook (Web Speech API + Google Cloud TTS)
+    pages/
+      Landing.tsx            # Landing page
+      Dashboard.tsx          # Main dashboard
+      LiveSession.tsx        # Live telemetry + real-time coaching
+      Replay.tsx             # CSV replay with synced charts
+      Analysis.tsx           # Two-lap AI comparison
+    services/
+      audioService.ts        # AudioContext pre-caching + Web Speech API fallback
+      coachingService.ts     # Split-brain coaching engine (hot/cold/feedforward)
+      geminiService.ts       # Gemini REST API wrapper
+      telemetryStreamService.ts  # SSE client, CSV/JSON file replay, virtual sensors
+    utils/
+      audioUtils.ts          # Audio helper utilities
+      coachingKnowledge.ts   # Coach personas, decision matrix, racing physics knowledge
+      telemetryParser.ts     # Telemetry data parsing utilities
+    types.ts                 # TelemetryFrame, Track, Corner, CoachAction, CoachPersona
+```
+
+### Data Flow
+
+```
+ SSE/CSV Input
+      │
+      ▼
+ TelemetryStreamService ──► TelemetryFrame
+      │
+      ├──► GaugeCluster (speed, throttle, brake, G)
+      ├──► TelemetryCharts (time-series plots)
+      ├──► TrackMap (car position on canvas)
+      │
+      └──► CoachingService
+              │
+              ├──► Hot Path ──► immediate CoachAction
+              ├──► Feedforward ──► geofence-triggered advice
+              └──► Cold Path ──► GeminiService ──► analysis
+                                                      │
+                                        All paths ────┘
+                                             │
+                                             ▼
+                                      CoachPanel (display)
+                                      AudioService (TTS)
+```
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Frontend | React 19 + TypeScript + Vite 8 |
+| Styling | Tailwind CSS 4 |
+| Charts | Recharts |
+| AI | Gemini Flash/Pro via `@google/genai` |
+| Audio | Web Speech API + Google Cloud TTS |
+| Track rendering | Canvas API |
+| Telemetry server | Python FastAPI + SSE |
+| GPS parsing | pynmea2 |
+| Communication | Server-Sent Events (SSE) |
+
+## License
+
+MIT
