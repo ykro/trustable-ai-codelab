@@ -1,6 +1,6 @@
 # Trustable AI Race Coach
 
-Today's best telemetry systems — including the SOTA Garmin Catalyst — run on fixed, deterministic rules. They tell you what went wrong after the fact, with numbers. This project takes a different approach: a multimodal, agentic AI system built on Google's latest stack (Gemini Nano on-device + Gemini cloud + Vertex AI) that processes real-time data streams to deliver context-aware coaching as it happens, adapted to driver skill level.
+Today's best telemetry systems — including the SOTA Garmin Catalyst — run on fixed, deterministic rules. They tell you what went wrong after the fact, with numbers. This project takes a different approach: a multimodal, agentic AI system built on Google's latest stack (Gemini Nano on-device + Gemini cloud) that processes real-time data streams to deliver context-aware coaching as it happens, adapted to driver skill level.
 
 The goal is to build a reference architecture that proves a split-brain AI can be trusted in a mission-critical, zero-latency environment. The patterns and learnings from high-frequency racing telemetry are designed to translate to broader enterprise domains where real-time AI decision-making under pressure is the challenge.
 
@@ -44,7 +44,7 @@ This system tells you in real time how to adapt and fix it, adjusted to your ski
 
 ### AGY Pipeline
 
-- [ ] **Define post-session data schema** — Specify what format coaching events and lap metrics should be stored in (Vertex AI, BigQuery, local JSON) so the coaching engine can export session data for analysis and cross-session learning.
+- [ ] **Define post-session data schema** — Specify what format coaching events and lap metrics should be stored in (BigQuery, local JSON, or other) so the coaching engine can export session data for analysis and cross-session learning.
 - [ ] **Build ingestion for coaching events** — Receive per-corner metrics (brake point, apex speed, exit speed), mistake zones, and coaching decisions from each session. Enable post-session analysis and improvement tracking.
 
 ### UX / Frontend
@@ -55,7 +55,7 @@ This system tells you in real time how to adapt and fix it, adjusted to your ski
 
 ### Future Work
 
-- [ ] **Cold path offline fallback** — Pre-compute a coaching lookup table for known tracks (keyed by corner + common mistakes) as offline replacement for Gemini cold path. Evaluate on-device Gemma 4 on Pixel 10 as an alternative.
+- [ ] **Cold path offline fallback** — Pre-compute a coaching lookup table for known tracks (keyed by corner + common mistakes) as offline replacement for Gemini cold path. Evaluate on-device Gemini Nano on Pixel 10 as an alternative.
 - [ ] **Track auto-detection** — Detect corners on unknown tracks from heading change rate alone, without pre-loaded track data. Enables track-agnostic coaching for any track day.
 - [ ] **Corner-specific coaching** — Integrate real coach knowledge (T-Rod session notes, Ross Bentley curriculum) into feedforward path for known tracks. For unknown tracks, determine whether telemetry-only analysis is sufficient or human coaching input is required.
 - [ ] **Two-way conversational dialog** — Enable real-time back-and-forth between the driver and the AI coach. This is the pinnacle for advanced drivers, where coaching becomes a discussion about minute nuances, setup adjustments, and driving strategy rather than one-way instructions.
@@ -99,7 +99,7 @@ The coaching engine routes decisions through three paths based on urgency:
        │    "Trail brake!" "Commit!" "Brake!"
        │    No cloud round-trip. Fires on threshold violations.
        │
-       ├──► COLD PATH (Gemini Flash/Pro, 2-5s)
+       ├──► COLD PATH (Gemini Flash, 2-5s)
        │    Multi-frame telemetry analysis with physics context.
        │    "You're lifting early in T5 — trust the grip through mid-corner."
        │
@@ -161,9 +161,9 @@ Open `http://localhost:5175`. Click **Open Dashboard** to enter the app.
 ### 3. Configure Gemini (optional)
 
 Click the gear icon in the navbar and paste your Gemini API key. This enables:
-- Cold path cloud coaching (Gemini Flash/Pro)
+- Cold path cloud coaching (Gemini Flash)
 - Post-session AI lap comparison
-- Google Cloud TTS voice output
+- Gemini TTS voice output
 
 The hot path and feedforward path work without an API key.
 
@@ -241,7 +241,7 @@ koru-application/
     hooks/
       useGeminiCloud.ts      # Gemini API integration hook
       usePredictiveCoaching.ts  # Mistake zone tracking + 8s lookahead
-      useTTS.ts              # Text-to-speech hook (Web Speech API + Google Cloud TTS)
+      useTTS.ts              # Text-to-speech hook (Web Speech API + Gemini TTS)
     pages/
       Landing.tsx            # Landing page
       Dashboard.tsx          # Main dashboard
@@ -294,8 +294,8 @@ koru-application/
 | Frontend | React 19 + TypeScript + Vite 8 |
 | Styling | Tailwind CSS 4 |
 | Charts | Recharts |
-| AI | Gemini Flash/Pro via `@google/genai` |
-| Audio | Web Speech API + Google Cloud TTS |
+| AI | Gemini 2.0 Flash via `@google/genai` |
+| Audio | Web Speech API + Gemini TTS (`gemini-2.5-pro-preview-tts`) |
 | Track rendering | Canvas API |
 | Telemetry server | Python FastAPI + SSE |
 | GPS parsing | pynmea2 |
