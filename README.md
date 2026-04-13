@@ -1,6 +1,8 @@
 # Trustable AI Race Coach
 
-Real-time AI driving coach for track days. Tells you how to adapt and fix mistakes as they happen, adjusted to your skill level.
+Today's best telemetry systems — including the SOTA Garmin Catalyst — run on fixed, deterministic rules. They tell you what went wrong after the fact, with numbers. This project takes a different approach: a multimodal, agentic AI system built on Google's latest stack (Gemma 4 edge + Gemini 3 cloud + Vertex AI) that processes real-time data streams to deliver context-aware coaching as it happens, adapted to driver skill level.
+
+The goal is to build a reference architecture that proves a split-brain AI can be trusted in a mission-critical, zero-latency environment — the kind where you're approaching a wall at 130 mph. The patterns and learnings from high-frequency racing telemetry are designed to translate to broader enterprise domains where real-time AI decision-making under pressure is the challenge.
 
 ```
 Catalyst tells you what you did wrong with numbers.
@@ -14,6 +16,7 @@ This system tells you in real time how to adapt and fix it, adjusted to your ski
   - [Edge / Telemetry](#edge--telemetry)
   - [AGY Pipeline](#agy-pipeline)
   - [UX / Frontend](#ux--frontend)
+  - [Future Work](#future-work)
 - [Architecture](#architecture)
   - [Split-Brain Coaching Engine](#split-brain-coaching-engine)
   - [Coach Personas](#coach-personas)
@@ -49,6 +52,13 @@ This system tells you in real time how to adapt and fix it, adjusted to your ski
 - [ ] **Convert to PWA** — Add service worker and manifest for offline support. The hot path and feedforward already run client-side; PWA ensures the UI loads without network at the track.
 - [ ] **Minimal HUD for track use** — Design a signal-light-only visual (green/yellow/red) for in-car use. The driver cannot look at a screen; audio is primary, but a peripheral color signal adds confirmation without distraction.
 - [ ] **Coach persona selection UX** — Evaluate whether mid-session coach switching is useful or distracting. Consider recommending a persona based on driver skill level from the driver model.
+
+### Future Work
+
+- [ ] **Cold path offline fallback** — Pre-compute a coaching lookup table for known tracks (keyed by corner + common mistakes) as offline replacement for Gemini cold path. Evaluate on-device Gemma 4 on Pixel 10 as an alternative.
+- [ ] **Track auto-detection** — Detect corners on unknown tracks from heading change rate alone, without pre-loaded track data. Enables track-agnostic coaching for any track day.
+- [ ] **Corner-specific coaching** — Integrate real coach knowledge (T-Rod session notes, Ross Bentley curriculum) into feedforward path for known tracks. For unknown tracks, determine whether telemetry-only analysis is sufficient or human coaching input is required.
+- [ ] **Two-way conversational dialog** — Enable real-time back-and-forth between the driver and the AI coach. This is the pinnacle for advanced drivers, where coaching becomes a discussion about minute nuances, setup adjustments, and driving strategy rather than one-way instructions.
 
 ---
 
