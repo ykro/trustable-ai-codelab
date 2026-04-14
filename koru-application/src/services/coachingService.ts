@@ -1,43 +1,79 @@
-import type { TelemetryFrame, CoachAction, Corner } from '../types';
+import type { TelemetryFrame, CoachAction, Corner, Track, CoachingDecision, CornerPhase } from '../types';
 import { COACHES, DEFAULT_COACH, DECISION_MATRIX, RACING_PHYSICS_KNOWLEDGE } from '../utils/coachingKnowledge';
 import { THUNDERHILL_EAST } from '../data/trackData';
 import { haversineDistance } from '../utils/geoUtils';
+import { CornerPhaseDetector } from './cornerPhaseDetector';
+import { TimingGate } from './timingGate';
 
-type CoachingCallback = (msg: { path: 'hot' | 'cold' | 'feedforward'; action?: CoachAction; text: string }) => void;
+/** Safety actions that bypass blackout and cooldown */
+const SAFETY_ACTIONS: Set<CoachAction> = new Set(['OVERSTEER_RECOVERY', 'BRAKE']);
+
+/** Map actions to priority levels */
+function actionPriority(action: CoachAction): 0 | 1 | 2 | 3 {
+  if (SAFETY_ACTIONS.has(action)) return 0;
+  if (['PUSH', 'FULL_THROTTLE', 'MAINTAIN', 'COAST', 'DONT_BE_A_WUSS'].includes(action)) return 3;
+  return 1;
+}
+
+type CoachingCallback = (msg: CoachingDecision) => void;
 
 /**
  * Split-brain coaching engine:
  * - HOT: heuristic rules with humanized text (<50ms)
  * - COLD: Gemini Cloud with cooldown (2-5s)
  * - FEEDFORWARD: geofence-based corner advice
+ *
+ * Now integrated with:
+ * - CornerPhaseDetector: knows if driver is mid-corner
+ * - TimingGate: enforces blackout during mid-corner/apex, safety bypass
  */
 export class CoachingService {
   private coachId: string = DEFAULT_COACH;
   private listeners: CoachingCallback[] = [];
   private lastColdTime = 0;
   private lastHotAction: CoachAction | null = null;
-  private lastHotTime = 0;
   private lastCorner: Corner | null = null;
   private coldCooldownMs = 15000;
-  private hotCooldownMs = 1500;
   private apiKey: string | null = null;
+
+  // New modules
+  private cornerDetector = new CornerPhaseDetector();
+  private timingGate = new TimingGate();
+  private currentPhase: CornerPhase = 'STRAIGHT';
+  private track: Track = THUNDERHILL_EAST;
 
   setCoach(id: string) { this.coachId = id; }
   getCoach() { return COACHES[this.coachId] || COACHES[DEFAULT_COACH]; }
   setApiKey(key: string) { this.apiKey = key; }
+
+  setTrack(track: Track): void {
+    this.track = track;
+    this.cornerDetector.setTrack(track);
+  }
+
+  getTimingState() { return this.timingGate.getState(); }
+  getCornerPhase() { return this.currentPhase; }
+
   onCoaching(cb: CoachingCallback) {
     this.listeners.push(cb);
     return () => { this.listeners = this.listeners.filter(l => l !== cb); };
   }
 
-  private emit(msg: Parameters<CoachingCallback>[0]) {
+  private emit(msg: CoachingDecision) {
+    this.timingGate.startDelivery();
     this.listeners.forEach(cb => cb(msg));
   }
 
   /** Called on every telemetry frame */
   processFrame(frame: TelemetryFrame) {
-    // 🧠 PROBE 2 — frame entering the coaching engine:
-    // console.log('🧠 COACHING', { speed: frame.speed.toFixed(1), brake: frame.brake.toFixed(0), throttle: frame.throttle.toFixed(0) });
+    // Detect corner phase
+    const detection = this.cornerDetector.detect(frame);
+    this.currentPhase = detection.phase;
+
+    // Update timing gate with current phase
+    this.timingGate.update(this.currentPhase);
+
+    // Run coaching paths
     this.runHotPath(frame);
     this.runFeedforward(frame);
     this.runColdPath(frame);
@@ -46,9 +82,6 @@ export class CoachingService {
   // ── HOT PATH: instant heuristic commands ───────────────
 
   private runHotPath(frame: TelemetryFrame) {
-    const now = Date.now();
-    if (now - this.lastHotTime < this.hotCooldownMs) return;
-
     const data = {
       brake: frame.brake,
       throttle: frame.throttle,
@@ -64,14 +97,22 @@ export class CoachingService {
         // Skip repeats
         if (rule.action === this.lastHotAction) return;
 
-        this.lastHotAction = rule.action;
-        this.lastHotTime = now;
+        const priority = actionPriority(rule.action);
 
-        // Humanize action name for display and TTS (e.g. TRAIL_BRAKE → "Trail brake")
+        // Check timing gate (safety bypasses blackout/cooldown)
+        if (!this.timingGate.canDeliver(priority)) return;
+
+        this.lastHotAction = rule.action;
+
         const text = this.humanizeAction(rule.action, frame);
-        // ⚡ PROBE 3 — hot path firing:
-        // console.log('⚡ HOT', { action: rule.action, text, coach: this.coachId });
-        this.emit({ path: 'hot', action: rule.action, text });
+        this.emit({
+          path: 'hot',
+          action: rule.action,
+          text,
+          priority,
+          cornerPhase: this.currentPhase,
+          timestamp: Date.now(),
+        });
         return;
       }
     }
@@ -80,16 +121,14 @@ export class CoachingService {
   /** Convert action enum to coaching phrase — context-aware and persona-specific */
   private humanizeAction(action: CoachAction, frame: TelemetryFrame): string {
     const coach = this.getCoach();
-    const speed = frame.speed;           // mph
-    const gLat = Math.abs(frame.gLat);   // lateral G (cornering load)
-    const gLong = frame.gLong;           // longitudinal G (accel/decel)
-    const brake = frame.brake;           // 0-100
-    const throttle = frame.throttle;     // 0-100
+    const speed = frame.speed;
+    const gLat = Math.abs(frame.gLat);
+    const gLong = frame.gLong;
+    const brake = frame.brake;
+    const throttle = frame.throttle;
 
-    // ── Contextual helpers ───────────────────────────────────
     const fast = speed > 80;
     const med  = speed > 45 && speed <= 80;
-    // const slow = speed <= 45;
     const highBrake  = brake > 70;
     const lightBrake = brake > 0 && brake <= 40;
     const highCornerLoad = gLat > 1.2;
@@ -259,6 +298,9 @@ export class CoachingService {
     if (now - this.lastColdTime < this.coldCooldownMs) return;
     if (!this.apiKey) return;
 
+    // Cold path is P2 — check timing gate
+    if (!this.timingGate.canDeliver(2)) return;
+
     this.lastColdTime = now;
     const coach = this.getCoach();
 
@@ -288,9 +330,13 @@ Give a short coaching instruction followed by a brief physics-based explanation.
       if (!res.ok) return;
       const data = await res.json();
       const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-      // ☁️ PROBE 4 — cold path (Gemini) responding:
-      // console.log('☁️ COLD', { coach: coach.id, chars: text.length, preview: text.slice(0, 60) });
-      if (text) this.emit({ path: 'cold', text });
+      if (text) this.emit({
+        path: 'cold',
+        text,
+        priority: 2,
+        cornerPhase: this.currentPhase,
+        timestamp: Date.now(),
+      });
     } catch (err) {
       console.error('Cold path failed:', err);
     }
@@ -299,14 +345,19 @@ Give a short coaching instruction followed by a brief physics-based explanation.
   // ── FEEDFORWARD: geofence-based corner advice ──────────
 
   private runFeedforward(frame: TelemetryFrame) {
-    const track = THUNDERHILL_EAST;
-    const nearest = this.findNearestCorner(frame.latitude, frame.longitude, track.corners);
+    // Feedforward is P1 — check timing gate
+    if (!this.timingGate.canDeliver(1)) return;
+
+    const nearest = this.findNearestCorner(frame.latitude, frame.longitude, this.track.corners);
 
     if (nearest && nearest !== this.lastCorner) {
       this.lastCorner = nearest;
       this.emit({
         path: 'feedforward',
         text: `📍 ${nearest.name}: ${nearest.advice}`,
+        priority: 1,
+        cornerPhase: this.currentPhase,
+        timestamp: Date.now(),
       });
     }
   }
