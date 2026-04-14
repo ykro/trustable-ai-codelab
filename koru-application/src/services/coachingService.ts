@@ -98,6 +98,7 @@ export class CoachingService {
     // ── AJ: terse telemetry commands ────────────────────────
     if (coach.id === 'aj') {
       switch (action) {
+        case 'OVERSTEER_RECOVERY': return 'Countersteer. Smooth.';
         case 'THRESHOLD':    return highBrake ? 'Max brake. Hold.' : 'More brake. Now.';
         case 'TRAIL_BRAKE':  return highCornerLoad ? 'Trail. Ease.' : 'Trail off. Release.';
         case 'BRAKE':        return fast ? 'Brake hard.' : 'Brake.';
@@ -119,6 +120,7 @@ export class CoachingService {
     // ── Rachel: physics-grounded ─────────────────────────────
     if (coach.id === 'rachel') {
       switch (action) {
+        case 'OVERSTEER_RECOVERY': return 'Countersteer gently — the rear has lost grip. Ease off inputs.';
         case 'THRESHOLD':    return highBrake
           ? 'Maximum decel — you\'re saturating the friction circle.'
           : 'More brake pedal — you have front traction available.';
@@ -154,6 +156,7 @@ export class CoachingService {
     // ── Tony: motivational, feel-based ──────────────────────
     if (coach.id === 'tony') {
       switch (action) {
+        case 'OVERSTEER_RECOVERY': return 'Easy! Catch it — smooth hands!';
         case 'THRESHOLD':    return highBrake
           ? 'Yes! Hammer those brakes — own the stop!'
           : 'More brake — you\'ve got more stopping left!';
@@ -185,6 +188,7 @@ export class CoachingService {
     // ── Garmin: data-focused, clinical numbers ───────────────
     if (coach.id === 'garmin') {
       switch (action) {
+        case 'OVERSTEER_RECOVERY': return `Oversteer detected. G-Lat: ${gLat.toFixed(2)}. Countersteer.`;
         case 'THRESHOLD':    return highBrake
           ? `${brake.toFixed(0)}% brake — holding threshold. Maintain.`
           : `${brake.toFixed(0)}% brake — ${(100 - brake).toFixed(0)}% capacity unused. Apply more.`;
@@ -211,6 +215,7 @@ export class CoachingService {
 
     // ── Super AJ: adaptive, hobby-driver-friendly ────────────
     switch (action) {
+      case 'OVERSTEER_RECOVERY': return 'Catch the slide! Countersteer gently and ease off!';
       case 'THRESHOLD':    return highBrake
         ? 'Good — keep that brake pressure!'
         : 'Squeeze harder on the brakes — you\'ve got more stopping power!';

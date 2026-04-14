@@ -69,6 +69,11 @@ export interface DecisionRule {
 
 export const DECISION_MATRIX: DecisionRule[] = [
   {
+    action: 'OVERSTEER_RECOVERY',
+    condition: 'High lateral G with decel and no throttle — loss of rear grip',
+    check: (f) => Math.abs(f.gLat) > 0.7 && f.gLong < -0.3 && f.throttle < 5 && f.speed > 40,
+  },
+  {
     action: 'THRESHOLD',
     condition: 'Heavy braking with strong decel',
     check: (f) => f.brake > 50 && f.gLong < -0.8,
