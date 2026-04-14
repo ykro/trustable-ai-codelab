@@ -4,6 +4,7 @@ import { THUNDERHILL_EAST } from '../data/trackData';
 import { haversineDistance } from '../utils/geoUtils';
 import { CornerPhaseDetector } from './cornerPhaseDetector';
 import { TimingGate } from './timingGate';
+import { CoachingQueue } from './coachingQueue';
 
 /** Safety actions that bypass blackout and cooldown */
 const SAFETY_ACTIONS: Set<CoachAction> = new Set(['OVERSTEER_RECOVERY', 'BRAKE']);
@@ -39,6 +40,7 @@ export class CoachingService {
   // New modules
   private cornerDetector = new CornerPhaseDetector();
   private timingGate = new TimingGate();
+  private coachingQueue = new CoachingQueue();
   private currentPhase: CornerPhase = 'STRAIGHT';
   private track: Track = THUNDERHILL_EAST;
 
@@ -73,10 +75,20 @@ export class CoachingService {
     // Update timing gate with current phase
     this.timingGate.update(this.currentPhase);
 
-    // Run coaching paths
+    // Run coaching paths (enqueue decisions)
     this.runHotPath(frame);
     this.runFeedforward(frame);
     this.runColdPath(frame);
+
+    // Drain queue — deliver highest-priority message if timing allows
+    this.drainQueue();
+  }
+
+  private drainQueue(): void {
+    const decision = this.coachingQueue.dequeue(this.timingGate, this.currentPhase);
+    if (decision) {
+      this.emit(decision);
+    }
   }
 
   // ── HOT PATH: instant heuristic commands ───────────────
@@ -98,21 +110,23 @@ export class CoachingService {
         if (rule.action === this.lastHotAction) return;
 
         const priority = actionPriority(rule.action);
-
-        // Check timing gate (safety bypasses blackout/cooldown)
-        if (!this.timingGate.canDeliver(priority)) return;
-
         this.lastHotAction = rule.action;
 
-        const text = this.humanizeAction(rule.action, frame);
-        this.emit({
+        const decision: CoachingDecision = {
           path: 'hot',
           action: rule.action,
-          text,
+          text: this.humanizeAction(rule.action, frame),
           priority,
           cornerPhase: this.currentPhase,
           timestamp: Date.now(),
-        });
+        };
+
+        // P0 safety: preempt queue and emit immediately
+        if (priority === 0) {
+          this.emit(this.coachingQueue.preempt(decision));
+        } else {
+          this.coachingQueue.enqueue(decision);
+        }
         return;
       }
     }
@@ -298,9 +312,6 @@ export class CoachingService {
     if (now - this.lastColdTime < this.coldCooldownMs) return;
     if (!this.apiKey) return;
 
-    // Cold path is P2 — check timing gate
-    if (!this.timingGate.canDeliver(2)) return;
-
     this.lastColdTime = now;
     const coach = this.getCoach();
 
@@ -330,7 +341,7 @@ Give a short coaching instruction followed by a brief physics-based explanation.
       if (!res.ok) return;
       const data = await res.json();
       const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-      if (text) this.emit({
+      if (text) this.coachingQueue.enqueue({
         path: 'cold',
         text,
         priority: 2,
@@ -345,14 +356,11 @@ Give a short coaching instruction followed by a brief physics-based explanation.
   // ── FEEDFORWARD: geofence-based corner advice ──────────
 
   private runFeedforward(frame: TelemetryFrame) {
-    // Feedforward is P1 — check timing gate
-    if (!this.timingGate.canDeliver(1)) return;
-
     const nearest = this.findNearestCorner(frame.latitude, frame.longitude, this.track.corners);
 
     if (nearest && nearest !== this.lastCorner) {
       this.lastCorner = nearest;
-      this.emit({
+      this.coachingQueue.enqueue({
         path: 'feedforward',
         text: `📍 ${nearest.name}: ${nearest.advice}`,
         priority: 1,
