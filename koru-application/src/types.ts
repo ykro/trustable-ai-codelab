@@ -45,6 +45,9 @@ export interface Corner {
   lat: number;
   lon: number;
   advice: string;
+  entryLat?: number;
+  entryLon?: number;
+  targetSpeed?: number;    // safe entry speed (mph)
 }
 
 export interface Sector {
@@ -102,7 +105,35 @@ export type CoachAction =
   | 'TURN_IN' | 'COMMIT' | 'ROTATE' | 'APEX'
   | 'THROTTLE' | 'PUSH' | 'FULL_THROTTLE'
   | 'STABILIZE' | 'MAINTAIN' | 'COAST'
-  | 'DONT_BE_A_WUSS';
+  | 'DONT_BE_A_WUSS' | 'OVERSTEER_RECOVERY';
+
+// ── Corner Phase & Timing ─────────────────────────────────
+
+export type CornerPhase =
+  | 'STRAIGHT' | 'BRAKE_ZONE' | 'TURN_IN'
+  | 'MID_CORNER' | 'APEX' | 'EXIT' | 'ACCELERATION';
+
+export type TimingState = 'OPEN' | 'DELIVERING' | 'COOLDOWN' | 'BLACKOUT';
+
+export interface CoachingDecision {
+  path: 'hot' | 'cold' | 'feedforward';
+  action?: CoachAction;
+  text: string;
+  priority: 0 | 1 | 2 | 3;
+  cornerPhase: CornerPhase;
+  timestamp: number;
+}
+
+// ── Driver Model ──────────────────────────────────────────
+
+export type SkillLevel = 'BEGINNER' | 'INTERMEDIATE' | 'ADVANCED';
+
+export interface DriverState {
+  skillLevel: SkillLevel;
+  cognitiveLoad: number;       // 0-1
+  inputSmoothness: number;     // 0-1 (1 = perfectly smooth)
+  coastingRatio: number;       // 0-1 (fraction of recent frames coasting)
+}
 
 export type SSEConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 
