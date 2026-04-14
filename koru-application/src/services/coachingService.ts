@@ -1,6 +1,7 @@
 import type { TelemetryFrame, CoachAction, Corner } from '../types';
 import { COACHES, DEFAULT_COACH, DECISION_MATRIX, RACING_PHYSICS_KNOWLEDGE } from '../utils/coachingKnowledge';
 import { THUNDERHILL_EAST } from '../data/trackData';
+import { haversineDistance } from '../utils/geoUtils';
 
 type CoachingCallback = (msg: { path: 'hot' | 'cold' | 'feedforward'; action?: CoachAction; text: string }) => void;
 
@@ -307,19 +308,9 @@ Give a short coaching instruction followed by a brief physics-based explanation.
 
   private findNearestCorner(lat: number, lon: number, corners: Corner[]): Corner | null {
     for (const c of corners) {
-      const dist = this.haversine(lat, lon, c.lat, c.lon);
+      const dist = haversineDistance(lat, lon, c.lat, c.lon);
       if (dist < 150) return c;
     }
     return null;
-  }
-
-  private haversine(lat1: number, lon1: number, lat2: number, lon2: number): number {
-    const R = 6371000;
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = Math.sin(dLat / 2) ** 2
-      + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180)
-      * Math.sin(dLon / 2) ** 2;
-    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
 }
