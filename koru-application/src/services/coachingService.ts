@@ -5,6 +5,7 @@ import { haversineDistance } from '../utils/geoUtils';
 import { CornerPhaseDetector } from './cornerPhaseDetector';
 import { TimingGate } from './timingGate';
 import { CoachingQueue } from './coachingQueue';
+import { DriverModel } from './driverModel';
 
 /** Safety actions that bypass blackout and cooldown */
 const SAFETY_ACTIONS: Set<CoachAction> = new Set(['OVERSTEER_RECOVERY', 'BRAKE']);
@@ -41,8 +42,10 @@ export class CoachingService {
   private cornerDetector = new CornerPhaseDetector();
   private timingGate = new TimingGate();
   private coachingQueue = new CoachingQueue();
+  private driverModel = new DriverModel();
   private currentPhase: CornerPhase = 'STRAIGHT';
   private track: Track = THUNDERHILL_EAST;
+  private lastSkillLevel: import('../types').SkillLevel = 'BEGINNER';
 
   setCoach(id: string) { this.coachId = id; }
   getCoach() { return COACHES[this.coachId] || COACHES[DEFAULT_COACH]; }
@@ -55,6 +58,7 @@ export class CoachingService {
 
   getTimingState() { return this.timingGate.getState(); }
   getCornerPhase() { return this.currentPhase; }
+  getDriverState() { return this.driverModel.getState(); }
 
   onCoaching(cb: CoachingCallback) {
     this.listeners.push(cb);
@@ -75,6 +79,10 @@ export class CoachingService {
     // Update timing gate with current phase
     this.timingGate.update(this.currentPhase);
 
+    // Update driver model and adapt coaching parameters
+    this.driverModel.update(frame);
+    this.adaptToSkillLevel();
+
     // Run coaching paths (enqueue decisions)
     this.runHotPath(frame);
     this.runFeedforward(frame);
@@ -88,6 +96,37 @@ export class CoachingService {
     const decision = this.coachingQueue.dequeue(this.timingGate, this.currentPhase);
     if (decision) {
       this.emit(decision);
+    }
+  }
+
+  /** Adapt coaching parameters when skill level changes */
+  private adaptToSkillLevel(): void {
+    const level = this.driverModel.getSkillLevel();
+    if (level === this.lastSkillLevel) return;
+    this.lastSkillLevel = level;
+
+    switch (level) {
+      case 'BEGINNER':
+        this.timingGate.updateConfig({
+          cooldownMs: 3000,
+          blackoutPhases: ['MID_CORNER', 'APEX'],
+        });
+        this.coldCooldownMs = 20000;
+        break;
+      case 'INTERMEDIATE':
+        this.timingGate.updateConfig({
+          cooldownMs: 1500,
+          blackoutPhases: ['APEX'],
+        });
+        this.coldCooldownMs = 15000;
+        break;
+      case 'ADVANCED':
+        this.timingGate.updateConfig({
+          cooldownMs: 1000,
+          blackoutPhases: [],
+        });
+        this.coldCooldownMs = 10000;
+        break;
     }
   }
 
