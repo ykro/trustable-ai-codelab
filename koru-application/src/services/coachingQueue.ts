@@ -43,7 +43,7 @@ export class CoachingQueue {
   }
 
   /** Dequeue the highest-priority message that the timing gate allows. */
-  dequeue(timingGate: TimingGate, currentPhase: CornerPhase): CoachingDecision | null {
+  dequeue(timingGate: TimingGate, _currentPhase: CornerPhase): CoachingDecision | null {
     this.expireStale();
 
     for (let i = 0; i < this.queue.length; i++) {

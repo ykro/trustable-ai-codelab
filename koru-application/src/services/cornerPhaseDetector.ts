@@ -56,7 +56,7 @@ export class CornerPhaseDetector {
   private classifyPhaseByDistance(
     distToEntry: number,
     distToApex: number,
-    corner: Corner,
+    _corner: Corner,
   ): CornerPhase {
     // Approaching entry — brake zone
     if (distToEntry < 100 && distToApex > 80) return 'BRAKE_ZONE';

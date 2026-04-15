@@ -13,6 +13,8 @@ const SAFETY_ACTIONS: Set<CoachAction> = new Set(['OVERSTEER_RECOVERY', 'BRAKE']
 /** Map actions to priority levels */
 function actionPriority(action: CoachAction): 0 | 1 | 2 | 3 {
   if (SAFETY_ACTIONS.has(action)) return 0;
+  if (['EARLY_THROTTLE', 'LIFT_MID_CORNER', 'SPIKE_BRAKE'].includes(action)) return 1;
+  if (['COGNITIVE_OVERLOAD'].includes(action)) return 2;
   if (['PUSH', 'FULL_THROTTLE', 'MAINTAIN', 'COAST', 'DONT_BE_A_WUSS'].includes(action)) return 3;
   return 1;
 }
@@ -46,6 +48,15 @@ export class CoachingService {
   private currentPhase: CornerPhase = 'STRAIGHT';
   private track: Track = THUNDERHILL_EAST;
   private lastSkillLevel: import('../types').SkillLevel = 'BEGINNER';
+
+  // Session progression
+  private frameCount = 0;
+  private sessionPhase: 1 | 2 | 3 = 1;
+  private static readonly PHASE_SUPPRESSED: Record<number, Set<CoachAction>> = {
+    1: new Set(['TRAIL_BRAKE', 'COMMIT', 'ROTATE', 'EARLY_THROTTLE', 'COGNITIVE_OVERLOAD']),
+    2: new Set(['COGNITIVE_OVERLOAD']),
+    3: new Set([]),
+  };
 
   setCoach(id: string) { this.coachId = id; }
   getCoach() { return COACHES[this.coachId] || COACHES[DEFAULT_COACH]; }
@@ -82,6 +93,10 @@ export class CoachingService {
     // Update driver model and adapt coaching parameters
     this.driverModel.update(frame);
     this.adaptToSkillLevel();
+
+    // Session progression
+    this.frameCount++;
+    this.updateSessionPhase();
 
     // Run coaching paths (enqueue decisions)
     this.runHotPath(frame);
@@ -130,6 +145,17 @@ export class CoachingService {
     }
   }
 
+  /** Update session phase based on frame count and skill level */
+  private updateSessionPhase(): void {
+    const skill = this.driverModel.getSkillLevel();
+    // Advanced drivers skip to phase 3 immediately
+    if (skill === 'ADVANCED') { this.sessionPhase = 3; return; }
+    // ~600 frames = ~1 minute at 10Hz, ~24s at 25Hz
+    if (this.frameCount > 1800) { this.sessionPhase = 3; }
+    else if (this.frameCount > 600) { this.sessionPhase = 2; }
+    else { this.sessionPhase = 1; }
+  }
+
   // ── HOT PATH: instant heuristic commands ───────────────
 
   private runHotPath(frame: TelemetryFrame) {
@@ -145,6 +171,9 @@ export class CoachingService {
       if (rule.check(data)) {
         // Skip neutral actions
         if (rule.action === 'STABILIZE' || rule.action === 'MAINTAIN') return;
+        // Session progression: suppress advanced actions in early phases
+        const suppressed = CoachingService.PHASE_SUPPRESSED[this.sessionPhase];
+        if (suppressed?.has(rule.action)) return;
         // Skip repeats
         if (rule.action === this.lastHotAction) return;
 
@@ -173,6 +202,41 @@ export class CoachingService {
 
   /** Convert action enum to coaching phrase — context-aware and persona-specific */
   private humanizeAction(action: CoachAction, frame: TelemetryFrame): string {
+    const skillLevel = this.driverModel.getSkillLevel();
+
+    // Skill-adapted phrases for key actions (override persona for clarity)
+    if (skillLevel === 'BEGINNER') {
+      switch (action) {
+        case 'TRAIL_BRAKE': return 'Hold a little brake as you turn in.';
+        case 'BRAKE': return frame.speed > 80 ? 'Brake now!' : 'Start braking.';
+        case 'COMMIT': return 'Trust the car — keep turning!';
+        case 'THROTTLE': return 'Gently add gas now.';
+        case 'COAST': return 'Pick a pedal — gas or brake, don\'t coast.';
+        case 'OVERSTEER_RECOVERY': return 'Easy! Straighten the wheel gently!';
+        case 'EARLY_THROTTLE': return 'Wait for the corner exit before adding gas.';
+        case 'LIFT_MID_CORNER': return 'Keep a little gas on through the turn — don\'t lift!';
+        case 'SPIKE_BRAKE': return 'Squeeze the brakes — don\'t stomp!';
+        case 'COGNITIVE_OVERLOAD': return 'Take a breath. Focus on driving smooth.';
+      }
+    }
+
+    if (skillLevel === 'ADVANCED') {
+      const advGLat = Math.abs(frame.gLat);
+      switch (action) {
+        case 'TRAIL_BRAKE': return `Trail off. G-Lat: ${advGLat.toFixed(2)}. Release linearly to apex.`;
+        case 'BRAKE': return `Brake. ${frame.speed.toFixed(0)} mph, target ${Math.abs(frame.gLong).toFixed(1)}G decel.`;
+        case 'COMMIT': return `Committed. G-Lat: ${advGLat.toFixed(2)}. Hold.`;
+        case 'THROTTLE': return `Throttle. ${frame.throttle.toFixed(0)}%. ${advGLat > 0.8 ? 'Progressive.' : 'Extend.'}`;
+        case 'COAST': return `Coasting — zero G-vector at ${frame.speed.toFixed(0)} mph. Losing time.`;
+        case 'OVERSTEER_RECOVERY': return `Countersteer. G-Lat ${advGLat.toFixed(2)}. Smooth inputs.`;
+        case 'EARLY_THROTTLE': return `Early throttle — still ${advGLat.toFixed(2)}G lateral. Delay.`;
+        case 'LIFT_MID_CORNER': return `Lift detected mid-corner. Maintenance throttle.`;
+        case 'SPIKE_BRAKE': return `Brake spike — ${frame.brake.toFixed(0)}% at ${Math.abs(frame.gLong).toFixed(1)}G. Squeeze, don't stab.`;
+        case 'COGNITIVE_OVERLOAD': return 'Reset. Smooth lap, no heroics.';
+      }
+    }
+
+    // INTERMEDIATE falls through to existing persona-based logic
     const coach = this.getCoach();
     const speed = frame.speed;
     const gLat = Math.abs(frame.gLat);
@@ -206,6 +270,10 @@ export class CoachingService {
         case 'MAINTAIN':     return 'Maintain.';
         case 'COAST':        return 'Pick a pedal.';
         case 'DONT_BE_A_WUSS': return 'Send it.';
+        case 'EARLY_THROTTLE': return 'Too early. Wait.';
+        case 'LIFT_MID_CORNER': return 'Don\'t lift. Maintenance throttle.';
+        case 'SPIKE_BRAKE': return 'Squeeze. Not stab.';
+        case 'COGNITIVE_OVERLOAD': return 'Reset. Smooth lap.';
       }
     }
 
@@ -242,6 +310,10 @@ export class CoachingService {
         case 'MAINTAIN':     return 'Platform balanced — maintain this G-vector.';
         case 'COAST':        return `Coasting at ${speed.toFixed(0)} mph — no G-vector. Pick a pedal to load the tires.`;
         case 'DONT_BE_A_WUSS': return 'The friction circle has margin — commit, the data says so.';
+        case 'EARLY_THROTTLE': return 'Throttle before exit — you\'re overloading the rear.';
+        case 'LIFT_MID_CORNER': return 'Lift mid-corner shifts weight forward — maintain throttle.';
+        case 'SPIKE_BRAKE': return 'Brake input too aggressive — the trace should be a ski slope, not a cliff.';
+        case 'COGNITIVE_OVERLOAD': return 'Cognitive saturation. Focus on one thing — smoothness.';
       }
     }
 
@@ -274,6 +346,10 @@ export class CoachingService {
         case 'MAINTAIN':     return 'That\'s it! Keep that pace — you\'re flying!';
         case 'COAST':        return 'Don\'t coast — commit to a pedal, stay sharp!';
         case 'DONT_BE_A_WUSS': return 'Stop lifting! Trust it — send it!';
+        case 'EARLY_THROTTLE': return 'Easy on the gas — wait for the exit!';
+        case 'LIFT_MID_CORNER': return 'Don\'t lift! Keep a little gas on!';
+        case 'SPIKE_BRAKE': return 'Squeeze those brakes — smooth is fast!';
+        case 'COGNITIVE_OVERLOAD': return 'Take a breath — one thing at a time!';
       }
     }
 
@@ -302,6 +378,10 @@ export class CoachingService {
         case 'MAINTAIN':     return `On delta. ${speed.toFixed(0)} mph. Maintain.`;
         case 'COAST':        return `Coasting — ${speed.toFixed(0)} mph. Zero G-vector. Losing time.`;
         case 'DONT_BE_A_WUSS': return `G-Lat headroom: ${(2.0 - gLat).toFixed(1)}G unused. Commit.`;
+        case 'EARLY_THROTTLE': return `Early throttle. G-Lat: ${gLat.toFixed(2)}. Delay to exit.`;
+        case 'LIFT_MID_CORNER': return `Lift detected. G-Lat: ${gLat.toFixed(2)}. Maintain 10-20% throttle.`;
+        case 'SPIKE_BRAKE': return `Brake spike: ${brake.toFixed(0)}% at ${Math.abs(gLong).toFixed(1)}G. Modulate.`;
+        case 'COGNITIVE_OVERLOAD': return 'Input variance high. Simplify.';
       }
     }
 
@@ -341,7 +421,13 @@ export class CoachingService {
       case 'DONT_BE_A_WUSS': return highThrottle
         ? 'You\'re on throttle — now commit fully, don\'t lift!'
         : 'Stop hesitating — trust the grip and send it!';
+      case 'EARLY_THROTTLE': return 'Wait for the exit before getting on the gas!';
+      case 'LIFT_MID_CORNER': return 'Don\'t lift mid-corner — keep a bit of throttle!';
+      case 'SPIKE_BRAKE': return 'Easy on the brakes — squeeze, don\'t slam!';
+      case 'COGNITIVE_OVERLOAD': return 'Slow down mentally — focus on smooth inputs.';
     }
+
+    return action;
   }
 
   // ── COLD PATH: Gemini Cloud detailed analysis ──────────
@@ -357,6 +443,19 @@ export class CoachingService {
     const cornerName = this.lastCorner?.name || 'straight';
     const cornerAdvice = this.lastCorner?.advice || '';
 
+    const skillLevel = this.driverModel.getSkillLevel();
+    let instruction: string;
+    switch (skillLevel) {
+      case 'BEGINNER':
+        instruction = 'Give ONE simple instruction using feel-based language. No jargon. Under 10 words. Sound like a patient driving instructor.';
+        break;
+      case 'ADVANCED':
+        instruction = 'Give a data-driven analysis referencing the telemetry numbers. Be concise. Under 15 words.';
+        break;
+      default:
+        instruction = 'Give a technique instruction with a brief physics explanation. Under 20 words.';
+    }
+
     const prompt = `${coach.systemPrompt}
 
 ${RACING_PHYSICS_KNOWLEDGE}
@@ -366,7 +465,7 @@ Speed: ${frame.speed.toFixed(1)} mph | Brake: ${frame.brake.toFixed(0)}% | Throt
 G-Lat: ${frame.gLat.toFixed(2)} | G-Long: ${frame.gLong.toFixed(2)}
 Location: ${cornerName} - ${cornerAdvice}
 
-Give a short coaching instruction followed by a brief physics-based explanation.`;
+${instruction}`;
 
     try {
       const res = await fetch(
