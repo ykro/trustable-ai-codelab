@@ -46,11 +46,11 @@ export const TROD_INSIGHTS: TRodInsight[] = [
     applicableLaps: 'mid',
   },
   {
-    id: 'trod-02-dont-be-a-wuss',
+    id: 'trod-02-throttle-boldness',
     category: 'throttle',
     cornerIds: [],
     insight:
-      '"Don\'t be a wuss." The driver needs to commit to throttle at the apex. ' +
+      '"Be bold." The driver needs to commit to throttle at the apex. ' +
       'The rental car is forgiving — it does not have enough power to spin itself. ' +
       'Half-throttle through a corner is slower AND less stable than full commitment.',
     coachingPhrase: 'Be bold! Squeeze it all the way.',

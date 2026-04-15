@@ -105,7 +105,7 @@ export type CoachAction =
   | 'TURN_IN' | 'COMMIT' | 'ROTATE' | 'APEX'
   | 'THROTTLE' | 'PUSH' | 'FULL_THROTTLE'
   | 'STABILIZE' | 'MAINTAIN' | 'COAST'
-  | 'DONT_BE_A_WUSS' | 'OVERSTEER_RECOVERY'
+  | 'HESITATION' | 'OVERSTEER_RECOVERY'
   | 'EARLY_THROTTLE' | 'LIFT_MID_CORNER' | 'SPIKE_BRAKE' | 'COGNITIVE_OVERLOAD';
 
 // ── Corner Phase & Timing ─────────────────────────────────

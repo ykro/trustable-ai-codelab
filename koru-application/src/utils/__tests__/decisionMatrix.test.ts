@@ -26,8 +26,8 @@ describe('DECISION_MATRIX', () => {
     expect(rule.check({ throttle: 5, brake: 5, speed: 70, gLat: 0, gLong: 0 })).toBe(true);
   });
 
-  it('DONT_BE_A_WUSS fires on heavy braking at low speed', () => {
-    const rule = DECISION_MATRIX.find((r) => r.action === 'DONT_BE_A_WUSS')!;
+  it('HESITATION fires on heavy braking at low speed', () => {
+    const rule = DECISION_MATRIX.find((r) => r.action === 'HESITATION')!;
     expect(rule.check({ brake: 50, speed: 40, throttle: 0, gLat: 0, gLong: -0.5 })).toBe(true);
   });
 

@@ -104,8 +104,8 @@ export const DECISION_MATRIX: DecisionRule[] = [
     check: (f) => f.throttle < 10 && f.brake < 10 && f.speed > 60,
   },
   {
-    action: 'DONT_BE_A_WUSS',
-    condition: 'Driver is being too timid — heavy braking at low speed or lifting way too early',
+    action: 'HESITATION',
+    condition: 'Driver is hesitating — heavy braking at low speed or lifting too early',
     check: (f) => (f.brake > 40 && f.speed < 45) || (f.throttle < 15 && f.brake < 5 && f.speed > 80 && Math.abs(f.gLat) < 0.3),
   },
   {
