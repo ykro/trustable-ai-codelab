@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { CoachingQueue } from '../coachingQueue';
-import { CoachingDecision } from '../../types';
+import type { CoachingDecision } from '../../types';
 import { TimingGate } from '../timingGate';
 
 describe('CoachingQueue', () => {
@@ -20,13 +20,12 @@ describe('CoachingQueue', () => {
     vi.useRealTimers();
   });
 
-  const createDecision = (priority: 0|1|2|3, id: string): CoachingDecision => ({
-    id,
+  const createDecision = (priority: 0|1|2|3, text: string): CoachingDecision => ({
     path: 'hot',
-    action: 'TEST_ACTION' as any,
-    text: 'Test message',
+    action: 'BRAKE' as const,
+    text,
     priority,
-    cornerId: null,
+    cornerPhase: 'STRAIGHT',
     timestamp: Date.now()
   });
 
@@ -36,7 +35,7 @@ describe('CoachingQueue', () => {
     expect(queue.size()).toBe(1);
     
     const dequeued = queue.dequeue(mockGate, 'STRAIGHT');
-    expect(dequeued?.id).toBe('test1');
+    expect(dequeued?.text).toBe('test1');
     expect(queue.size()).toBe(0);
   });
 
@@ -47,9 +46,9 @@ describe('CoachingQueue', () => {
     vi.setSystemTime(1020);
     queue.enqueue(createDecision(0, 'critical'));
 
-    expect(queue.dequeue(mockGate, 'STRAIGHT')?.id).toBe('critical');
-    expect(queue.dequeue(mockGate, 'STRAIGHT')?.id).toBe('high');
-    expect(queue.dequeue(mockGate, 'STRAIGHT')?.id).toBe('low');
+    expect(queue.dequeue(mockGate, 'STRAIGHT')?.text).toBe('critical');
+    expect(queue.dequeue(mockGate, 'STRAIGHT')?.text).toBe('high');
+    expect(queue.dequeue(mockGate, 'STRAIGHT')?.text).toBe('low');
   });
 
   it('should discard stale messages on dequeue', () => {
@@ -62,7 +61,7 @@ describe('CoachingQueue', () => {
     queue.enqueue(createDecision(2, 'fresh'));
 
     const dequeued = queue.dequeue(mockGate, 'STRAIGHT');
-    expect(dequeued?.id).toBe('fresh');
+    expect(dequeued?.text).toBe('fresh');
     expect(queue.size()).toBe(0);
   });
 

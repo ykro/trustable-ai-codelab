@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { DriverModel } from '../driverModel';
-import { TelemetryFrame } from '../../types';
+import type { TelemetryFrame } from '../../types';
 
 describe('DriverModel', () => {
   let model: DriverModel;
@@ -9,16 +9,15 @@ describe('DriverModel', () => {
     model = new DriverModel();
   });
 
-  const createFrame = (speed: number, throttle: number, brake: number): TelemetryFrame => ({
-    timestamp: Date.now(),
-    lat: 0,
-    lon: 0,
+  const createFrame = (time: number, speed: number, throttle: number, brake: number): TelemetryFrame => ({
+    time,
+    latitude: 0,
+    longitude: 0,
     speed,
-    heading: 0,
     throttle,
     brake,
     gLat: 0,
-    gLon: 0
+    gLong: 0,
   });
 
   it('should start as BEGINNER', () => {
@@ -33,8 +32,8 @@ describe('DriverModel', () => {
 
   it('should record frames and calculate smoothness', () => {
     // Just a basic test to ensure update works without throwing
-    model.update(createFrame(50, 100, 0));
-    model.update(createFrame(50, 100, 0));
+    model.update(createFrame(0.0, 50, 100, 0));
+    model.update(createFrame(0.1, 50, 100, 0));
     const state = model.getState();
     expect(state.coastingRatio).toBeGreaterThanOrEqual(0);
   });

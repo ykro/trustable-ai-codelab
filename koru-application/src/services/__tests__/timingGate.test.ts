@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { TimingGate } from '../timingGate';
-import { CornerPhase } from '../../types';
 
 describe('TimingGate', () => {
   let gate: TimingGate;
