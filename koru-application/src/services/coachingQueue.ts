@@ -30,7 +30,9 @@ export class CoachingQueue {
         }
       }
       // Only drop if the new message is higher priority (lower number)
-      if (decision.priority < this.queue[worstIdx].priority) {
+      if (decision.priority < this.queue[worstIdx].priority ||
+          (decision.priority === this.queue[worstIdx].priority &&
+           decision.timestamp > this.queue[worstIdx].timestamp)) {
         this.queue.splice(worstIdx, 1);
       } else {
         return; // Queue full, new message is lower priority — drop it
