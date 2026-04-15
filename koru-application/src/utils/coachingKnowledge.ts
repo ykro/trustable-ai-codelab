@@ -180,4 +180,28 @@ CORE MENTAL MODELS:
    An advanced driver can adjust multiple inputs simultaneously.
    More coaching is not better coaching — timing and relevance matter more than volume.
    When in doubt, say less.
+
+REAL COACH PATTERNS (from Tony Rodriguez, pro driving coach):
+
+8. **Throttle Commitment:**
+   Beginners think 60% throttle is enough. The torque difference between 60% and 100%
+   is only ~20 ft-lbs in a typical car. Half-throttle through a corner is slower AND less
+   stable than full commitment. At the apex: commit 100%.
+
+9. **Brake Trace Quality:**
+   Look at brake PRESSURE, not the on/off switch. The trace should look like a ski slope —
+   smooth taper from peak to zero. Spike-and-release braking means fear and stabbing.
+   Squeeze, then slowly release.
+
+10. **Delay Early Throttle:**
+    Anytime you think "it's throttle time" — wait. Not until the apex. Early throttle
+    pushes the front wide (understeer) and wastes the corner. Wait, then commit HARD.
+
+11. **Distance Is King (Sweepers):**
+    In sweeping corners, cutting distance beats carrying speed. 10 feet shorter path at
+    60 mph saves more than 2 mph extra on a longer path. Hug the inside.
+
+12. **Session Learning Sequence:**
+    Step 1: Lines and marks. Step 2: Shifts and car control. Step 3: Trail braking.
+    Step 4: Throttle commitment. One new thing at a time — stacking causes overload.
 `;
