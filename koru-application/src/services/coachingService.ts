@@ -1,7 +1,6 @@
 import type { TelemetryFrame, CoachAction, Corner, Track, CoachingDecision, CornerPhase } from '../types';
 import { COACHES, DEFAULT_COACH, DECISION_MATRIX, RACING_PHYSICS_KNOWLEDGE } from '../utils/coachingKnowledge';
-import { THUNDERHILL_EAST } from '../data/trackData';
-import { haversineDistance } from '../utils/geoUtils';
+import { haversineDistance, isValidGps } from '../utils/geoUtils';
 import { CornerPhaseDetector } from './cornerPhaseDetector';
 import { TimingGate } from './timingGate';
 import { CoachingQueue } from './coachingQueue';
@@ -10,13 +9,16 @@ import { DriverModel } from './driverModel';
 /** Safety actions that bypass blackout and cooldown */
 const SAFETY_ACTIONS: Set<CoachAction> = new Set(['OVERSTEER_RECOVERY', 'BRAKE']);
 
-/** Map actions to priority levels */
+/** Map actions to priority levels (module-level Map avoids per-call array allocations) */
+const ACTION_PRIORITY: Map<string, 0 | 1 | 2 | 3> = new Map([
+  ['OVERSTEER_RECOVERY', 0], ['BRAKE', 0],
+  ['EARLY_THROTTLE', 1], ['LIFT_MID_CORNER', 1], ['SPIKE_BRAKE', 1],
+  ['COGNITIVE_OVERLOAD', 2],
+  ['PUSH', 3], ['FULL_THROTTLE', 3], ['MAINTAIN', 3], ['COAST', 3], ['DONT_BE_A_WUSS', 3],
+]);
+
 function actionPriority(action: CoachAction): 0 | 1 | 2 | 3 {
-  if (SAFETY_ACTIONS.has(action)) return 0;
-  if (['EARLY_THROTTLE', 'LIFT_MID_CORNER', 'SPIKE_BRAKE'].includes(action)) return 1;
-  if (['COGNITIVE_OVERLOAD'].includes(action)) return 2;
-  if (['PUSH', 'FULL_THROTTLE', 'MAINTAIN', 'COAST', 'DONT_BE_A_WUSS'].includes(action)) return 3;
-  return 1;
+  return ACTION_PRIORITY.get(action) ?? 1;
 }
 
 type CoachingCallback = (msg: CoachingDecision) => void;
@@ -46,11 +48,10 @@ export class CoachingService {
   private coachingQueue = new CoachingQueue();
   private driverModel = new DriverModel();
   private currentPhase: CornerPhase = 'STRAIGHT';
-  private track: Track = THUNDERHILL_EAST;
+  private track: Track | null = null;
   private lastSkillLevel: import('../types').SkillLevel = 'BEGINNER';
 
   // Session progression
-  private frameCount = 0;
   private sessionPhase: 1 | 2 | 3 = 1;
   private static readonly PHASE_SUPPRESSED: Record<number, Set<CoachAction>> = {
     1: new Set(['TRAIL_BRAKE', 'COMMIT', 'ROTATE', 'EARLY_THROTTLE', 'COGNITIVE_OVERLOAD']),
@@ -95,13 +96,12 @@ export class CoachingService {
     this.adaptToSkillLevel();
 
     // Session progression
-    this.frameCount++;
-    this.updateSessionPhase();
+    this.updateSessionPhase(frame.time);
 
     // Run coaching paths (enqueue decisions)
     this.runHotPath(frame);
     this.runFeedforward(frame);
-    this.runColdPath(frame);
+    void this.runColdPath(frame);
 
     // Drain queue — deliver highest-priority message if timing allows
     this.drainQueue();
@@ -145,14 +145,12 @@ export class CoachingService {
     }
   }
 
-  /** Update session phase based on frame count and skill level */
-  private updateSessionPhase(): void {
+  /** Update session phase based on frame time and skill level */
+  private updateSessionPhase(frameTime: number): void {
     const skill = this.driverModel.getSkillLevel();
-    // Advanced drivers skip to phase 3 immediately
     if (skill === 'ADVANCED') { this.sessionPhase = 3; return; }
-    // ~600 frames = ~1 minute at 10Hz, ~24s at 25Hz
-    if (this.frameCount > 1800) { this.sessionPhase = 3; }
-    else if (this.frameCount > 600) { this.sessionPhase = 2; }
+    if (frameTime > 180) { this.sessionPhase = 3; }
+    else if (frameTime > 60) { this.sessionPhase = 2; }
     else { this.sessionPhase = 1; }
   }
 
@@ -173,9 +171,9 @@ export class CoachingService {
         if (rule.action === 'STABILIZE' || rule.action === 'MAINTAIN') return;
         // Session progression: suppress advanced actions in early phases
         const suppressed = CoachingService.PHASE_SUPPRESSED[this.sessionPhase];
-        if (suppressed?.has(rule.action)) return;
+        if (suppressed?.has(rule.action)) continue;
         // Skip repeats
-        if (rule.action === this.lastHotAction) return;
+        if (rule.action === this.lastHotAction) continue;
 
         const priority = actionPriority(rule.action);
         this.lastHotAction = rule.action;
@@ -209,14 +207,14 @@ export class CoachingService {
       switch (action) {
         case 'TRAIL_BRAKE': return 'Hold a little brake as you turn in.';
         case 'BRAKE': return frame.speed > 80 ? 'Brake now!' : 'Start braking.';
-        case 'COMMIT': return 'Trust the car — keep turning!';
+        case 'COMMIT': return 'Commit! Full throttle now — the car can take it.';
         case 'THROTTLE': return 'Gently add gas now.';
-        case 'COAST': return 'Pick a pedal — gas or brake, don\'t coast.';
+        case 'COAST': return 'Don\'t be a wuss! Pick a pedal — commit!';
         case 'OVERSTEER_RECOVERY': return 'Easy! Straighten the wheel gently!';
-        case 'EARLY_THROTTLE': return 'Wait for the corner exit before adding gas.';
+        case 'EARLY_THROTTLE': return 'Wait for it... wait... NOW! Full throttle.';
         case 'LIFT_MID_CORNER': return 'Keep a little gas on through the turn — don\'t lift!';
-        case 'SPIKE_BRAKE': return 'Squeeze the brakes — don\'t stomp!';
-        case 'COGNITIVE_OVERLOAD': return 'Take a breath. Focus on driving smooth.';
+        case 'SPIKE_BRAKE': return 'Smoother on the brakes — squeeze, then slowly release.';
+        case 'COGNITIVE_OVERLOAD': return 'Feeling busy? Just focus on your marks this lap.';
       }
     }
 
@@ -469,10 +467,13 @@ ${instruction}`;
 
     try {
       const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${this.apiKey}`,
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': this.apiKey!,
+          },
           body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
         }
       );
@@ -494,6 +495,8 @@ ${instruction}`;
   // ── FEEDFORWARD: geofence-based corner advice ──────────
 
   private runFeedforward(frame: TelemetryFrame) {
+    if (!this.track) return;
+    if (!isValidGps(frame.latitude, frame.longitude)) return;
     const nearest = this.findNearestCorner(frame.latitude, frame.longitude, this.track.corners);
 
     if (nearest && nearest !== this.lastCorner) {

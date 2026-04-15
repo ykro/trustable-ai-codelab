@@ -1,5 +1,5 @@
 import type { TelemetryFrame, Track, Corner, CornerPhase } from '../types';
-import { haversineDistance } from '../utils/geoUtils';
+import { haversineDistance, isValidGps } from '../utils/geoUtils';
 
 export interface CornerDetection {
   phase: CornerPhase;
@@ -15,9 +15,13 @@ export interface CornerDetection {
  */
 export class CornerPhaseDetector {
   private track: Track | null = null;
+  private cosLat = Math.cos(38.16 * Math.PI / 180); // approximate, updated on setTrack
 
   setTrack(track: Track | null): void {
     this.track = track;
+    if (track?.center) {
+      this.cosLat = Math.cos(track.center.lat * Math.PI / 180);
+    }
   }
 
   detect(frame: TelemetryFrame): CornerDetection {
@@ -32,10 +36,17 @@ export class CornerPhaseDetector {
   }
 
   private detectFromGps(frame: TelemetryFrame, track: Track): CornerDetection | null {
+    if (!isValidGps(frame.latitude, frame.longitude)) return null;
     for (const corner of track.corners) {
       // Use entry point if available, otherwise use apex
       const refLat = corner.entryLat ?? corner.lat;
       const refLon = corner.entryLon ?? corner.lon;
+
+      // Fast equirectangular pre-filter (skip expensive haversine for distant corners)
+      const dLat = (frame.latitude - refLat) * 111320;
+      const dLon = (frame.longitude - refLon) * 111320 * this.cosLat;
+      const fastDist = Math.sqrt(dLat * dLat + dLon * dLon);
+      if (fastDist > 300) continue; // Skip corners more than 300m away
 
       const distToEntry = haversineDistance(frame.latitude, frame.longitude, refLat, refLon);
       const distToApex = haversineDistance(frame.latitude, frame.longitude, corner.lat, corner.lon);
