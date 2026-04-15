@@ -14,7 +14,7 @@ const ACTION_PRIORITY: Map<string, 0 | 1 | 2 | 3> = new Map([
   ['OVERSTEER_RECOVERY', 0], ['BRAKE', 0],
   ['EARLY_THROTTLE', 1], ['LIFT_MID_CORNER', 1], ['SPIKE_BRAKE', 1],
   ['COGNITIVE_OVERLOAD', 2],
-  ['PUSH', 3], ['FULL_THROTTLE', 3], ['MAINTAIN', 3], ['COAST', 3], ['DONT_BE_A_WUSS', 3],
+  ['PUSH', 3], ['FULL_THROTTLE', 3], ['MAINTAIN', 3], ['COAST', 3], ['HESITATION', 3],
 ]);
 
 function actionPriority(action: CoachAction): 0 | 1 | 2 | 3 {
@@ -50,6 +50,7 @@ export class CoachingService {
   private currentPhase: CornerPhase = 'STRAIGHT';
   private track: Track | null = null;
   private lastSkillLevel: import('../types').SkillLevel = 'BEGINNER';
+  private lastCognitiveCheck = 0;
 
   // Session progression
   private sessionPhase: 1 | 2 | 3 = 1;
@@ -100,6 +101,7 @@ export class CoachingService {
 
     // Run coaching paths (enqueue decisions)
     this.runHotPath(frame);
+    this.checkCognitiveOverload(frame);
     this.runFeedforward(frame);
     void this.runColdPath(frame);
 
@@ -198,6 +200,25 @@ export class CoachingService {
     }
   }
 
+  /** Check driver model for cognitive overload — runs outside decision matrix */
+  private checkCognitiveOverload(frame: TelemetryFrame): void {
+    // Only check every 10 seconds
+    if (frame.time - this.lastCognitiveCheck < 10) return;
+    this.lastCognitiveCheck = frame.time;
+
+    const state = this.driverModel.getState();
+    if (state.inputSmoothness < 0.3 && state.skillLevel !== 'ADVANCED') {
+      this.coachingQueue.enqueue({
+        path: 'hot',
+        action: 'COGNITIVE_OVERLOAD',
+        text: this.humanizeAction('COGNITIVE_OVERLOAD', frame),
+        priority: 2,
+        cornerPhase: this.currentPhase,
+        timestamp: Date.now(),
+      });
+    }
+  }
+
   /** Convert action enum to coaching phrase — context-aware and persona-specific */
   private humanizeAction(action: CoachAction, frame: TelemetryFrame): string {
     const skillLevel = this.driverModel.getSkillLevel();
@@ -209,7 +230,7 @@ export class CoachingService {
         case 'BRAKE': return frame.speed > 80 ? 'Brake now!' : 'Start braking.';
         case 'COMMIT': return 'Commit! Full throttle now — the car can take it.';
         case 'THROTTLE': return 'Gently add gas now.';
-        case 'COAST': return 'Don\'t be a wuss! Pick a pedal — commit!';
+        case 'COAST': return 'Pick a pedal — gas or brake. Stay committed!';
         case 'OVERSTEER_RECOVERY': return 'Easy! Straighten the wheel gently!';
         case 'EARLY_THROTTLE': return 'Wait for it... wait... NOW! Full throttle.';
         case 'LIFT_MID_CORNER': return 'Keep a little gas on through the turn — don\'t lift!';
@@ -267,7 +288,7 @@ export class CoachingService {
         case 'STABILIZE':    return 'Stabilize.';
         case 'MAINTAIN':     return 'Maintain.';
         case 'COAST':        return 'Pick a pedal.';
-        case 'DONT_BE_A_WUSS': return 'Send it.';
+        case 'HESITATION': return 'Send it.';
         case 'EARLY_THROTTLE': return 'Too early. Wait.';
         case 'LIFT_MID_CORNER': return 'Don\'t lift. Maintenance throttle.';
         case 'SPIKE_BRAKE': return 'Squeeze. Not stab.';
@@ -307,7 +328,7 @@ export class CoachingService {
         case 'STABILIZE':    return 'Neutral inputs — let the platform settle.';
         case 'MAINTAIN':     return 'Platform balanced — maintain this G-vector.';
         case 'COAST':        return `Coasting at ${speed.toFixed(0)} mph — no G-vector. Pick a pedal to load the tires.`;
-        case 'DONT_BE_A_WUSS': return 'The friction circle has margin — commit, the data says so.';
+        case 'HESITATION': return 'The friction circle has margin — commit, the data says so.';
         case 'EARLY_THROTTLE': return 'Throttle before exit — you\'re overloading the rear.';
         case 'LIFT_MID_CORNER': return 'Lift mid-corner shifts weight forward — maintain throttle.';
         case 'SPIKE_BRAKE': return 'Brake input too aggressive — the trace should be a ski slope, not a cliff.';
@@ -343,7 +364,7 @@ export class CoachingService {
         case 'STABILIZE':    return 'Easy — breathe, hold it steady!';
         case 'MAINTAIN':     return 'That\'s it! Keep that pace — you\'re flying!';
         case 'COAST':        return 'Don\'t coast — commit to a pedal, stay sharp!';
-        case 'DONT_BE_A_WUSS': return 'Stop lifting! Trust it — send it!';
+        case 'HESITATION': return 'Stop lifting! Trust it — send it!';
         case 'EARLY_THROTTLE': return 'Easy on the gas — wait for the exit!';
         case 'LIFT_MID_CORNER': return 'Don\'t lift! Keep a little gas on!';
         case 'SPIKE_BRAKE': return 'Squeeze those brakes — smooth is fast!';
@@ -375,7 +396,7 @@ export class CoachingService {
         case 'STABILIZE':    return 'Inputs neutral. G-forces stabilizing.';
         case 'MAINTAIN':     return `On delta. ${speed.toFixed(0)} mph. Maintain.`;
         case 'COAST':        return `Coasting — ${speed.toFixed(0)} mph. Zero G-vector. Losing time.`;
-        case 'DONT_BE_A_WUSS': return `G-Lat headroom: ${(2.0 - gLat).toFixed(1)}G unused. Commit.`;
+        case 'HESITATION': return `G-Lat headroom: ${(2.0 - gLat).toFixed(1)}G unused. Commit.`;
         case 'EARLY_THROTTLE': return `Early throttle. G-Lat: ${gLat.toFixed(2)}. Delay to exit.`;
         case 'LIFT_MID_CORNER': return `Lift detected. G-Lat: ${gLat.toFixed(2)}. Maintain 10-20% throttle.`;
         case 'SPIKE_BRAKE': return `Brake spike: ${brake.toFixed(0)}% at ${Math.abs(gLong).toFixed(1)}G. Modulate.`;
@@ -416,7 +437,7 @@ export class CoachingService {
       case 'STABILIZE':    return 'Smooth inputs — hold it steady.';
       case 'MAINTAIN':     return 'Looking good — keep that pace!';
       case 'COAST':        return `Coasting at ${speed.toFixed(0)} mph — pick a pedal, stay committed!`;
-      case 'DONT_BE_A_WUSS': return highThrottle
+      case 'HESITATION': return highThrottle
         ? 'You\'re on throttle — now commit fully, don\'t lift!'
         : 'Stop hesitating — trust the grip and send it!';
       case 'EARLY_THROTTLE': return 'Wait for the exit before getting on the gas!';
