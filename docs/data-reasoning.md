@@ -114,7 +114,9 @@ When skill level changes, the system adapts:
 
 #### Racing Physics Knowledge (for Gemini prompts)
 
-7 Ross Bentley mental models, track-agnostic:
+7 Ross Bentley mental models + 5 T-Rod coaching patterns, all track-agnostic:
+
+**Ross Bentley:**
 1. Friction Circle (clock metaphor)
 2. Weight Transfer (seesaw metaphor)
 3. Trail Braking (handoff metaphor)
@@ -122,6 +124,13 @@ When skill level changes, the system adapts:
 5. Maintenance Throttle
 6. Slow In, Fast Out
 7. One Thing at a Time (cognitive load)
+
+**T-Rod (Tony Rodriguez, real coaching session at Sonoma):**
+8. Throttle Commitment — commit 100% at apex
+9. Brake Trace Quality — ski slope, not cliff
+10. Delay Early Throttle — wait for apex, then commit hard
+11. Distance Is King — shorter path beats higher speed in sweepers
+12. Session Learning Sequence — lines → shifts → trail braking → throttle
 
 #### Decision Matrix Rules
 
@@ -136,13 +145,15 @@ When skill level changes, the system adapts:
 | THROTTLE | Moderate cornering + low throttle | P1 |
 | PUSH | High throttle on straight | P3 |
 | COAST | No throttle, no brake, high speed | P1 |
-| DONT_BE_A_WUSS | Heavy braking at low speed or lifting too early | P3 |
+| HESITATION | Driver hesitating — heavy braking at low speed or lifting too early | P3 |
 | FULL_THROTTLE | Straight with good speed | P3 |
 | **EARLY_THROTTLE** | Throttle before corner exit with lateral G | P1 |
 | **LIFT_MID_CORNER** | Zero throttle mid-corner (destabilizes car) | P1 |
 | **SPIKE_BRAKE** | Brake too aggressively (>70%, >1.2G decel) | P1 |
 
 Bold = new in Phase 5.
+
+**COGNITIVE_OVERLOAD** is not in the decision matrix — it is emitted directly by `CoachingService.checkCognitiveOverload()` which reads `driverModel.getState().inputSmoothness`. Fires every 10s when smoothness < 0.3 for non-ADVANCED drivers (P2).
 
 #### Skill-Adapted Humanization
 
@@ -151,8 +162,9 @@ Each coaching action produces different text based on skill level:
 | Action | Beginner | Advanced |
 |--------|----------|----------|
 | TRAIL_BRAKE | "Hold a little brake as you turn in." | "Trail off. G-Lat: 0.85. Release linearly to apex." |
-| COAST | "Pick a pedal — gas or brake, don't coast." | "Coasting — zero G-vector at 72 mph. Losing time." |
-| SPIKE_BRAKE | "Squeeze the brakes — don't stomp!" | "Brake spike — 85% at 1.3G. Squeeze, don't stab." |
+| COAST | "Pick a pedal — gas or brake. Stay committed!" | "Coasting — zero G-vector at 72 mph. Losing time." |
+| SPIKE_BRAKE | "Smoother on the brakes — squeeze, then slowly release." | "Brake spike — 85% at 1.3G. Squeeze, don't stab." |
+| COGNITIVE_OVERLOAD | "Feeling busy? Just focus on your marks this lap." | "Reset. Smooth lap, no heroics." |
 
 Intermediate drivers get persona-specific phrases (AJ, Rachel, Tony, Garmin, Super AJ).
 
@@ -164,9 +176,9 @@ Three phases that gradually introduce complexity:
 
 | Phase | When | Suppressed Actions |
 |-------|------|--------------------|
-| Phase 1 (warm-up) | First 600 frames | TRAIL_BRAKE, COMMIT, ROTATE, EARLY_THROTTLE, COGNITIVE_OVERLOAD |
-| Phase 2 (building) | 600-1800 frames | COGNITIVE_OVERLOAD |
-| Phase 3 (full) | After 1800 frames | None |
+| Phase 1 (warm-up) | First 60 seconds | TRAIL_BRAKE, COMMIT, ROTATE, EARLY_THROTTLE, COGNITIVE_OVERLOAD |
+| Phase 2 (building) | 60-180 seconds | COGNITIVE_OVERLOAD |
+| Phase 3 (full) | After 180 seconds | None |
 
 Advanced drivers skip directly to Phase 3.
 
