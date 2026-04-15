@@ -102,9 +102,10 @@ export class DriverModel {
   private computeSmoothness(): number {
     const variance = (arr: { time: number; value: number }[]): number => {
       if (arr.length < 2) return 0;
-      const values = arr.map(d => d.value);
-      const mean = values.reduce((s, v) => s + v, 0) / values.length;
-      return values.reduce((s, v) => s + (v - mean) ** 2, 0) / values.length;
+      let sum = 0, sumSq = 0;
+      for (const d of arr) { sum += d.value; sumSq += d.value * d.value; }
+      const mean = sum / arr.length;
+      return sumSq / arr.length - mean * mean;
     };
 
     const tVar = Math.min(variance(this.throttleDeltas) / 2500, 1);

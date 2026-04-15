@@ -28,9 +28,11 @@ export class TimingGate {
   private lastDeliveryTime = 0;
   private config: TimingGateConfig;
   private inBlackoutPhase = false;
+  private blackoutSet: Set<CornerPhase>;
 
   constructor(config?: Partial<TimingGateConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
+    this.blackoutSet = new Set(this.config.blackoutPhases);
   }
 
   getState(): TimingState {
@@ -40,11 +42,14 @@ export class TimingGate {
   /** Update config dynamically (e.g., when driver model changes skill level) */
   updateConfig(partial: Partial<TimingGateConfig>): void {
     this.config = { ...this.config, ...partial };
+    if (partial.blackoutPhases) {
+      this.blackoutSet = new Set(this.config.blackoutPhases);
+    }
   }
 
   /** Called each frame to update blackout state based on corner phase */
   update(cornerPhase: CornerPhase): void {
-    this.inBlackoutPhase = this.config.blackoutPhases.includes(cornerPhase);
+    this.inBlackoutPhase = this.blackoutSet.has(cornerPhase);
 
     const now = Date.now();
 
