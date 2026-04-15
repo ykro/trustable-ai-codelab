@@ -17,6 +17,7 @@ This system tells you in real time how to adapt and fix it, adjusted to your ski
   - [AGY Pipeline](#agy-pipeline)
   - [UX / Frontend](#ux--frontend)
   - [Future Work](#future-work)
+- [Hardware Stack](#hardware-stack)
 - [Architecture](#architecture)
   - [Split-Brain Coaching Engine](#split-brain-coaching-engine)
   - [Coach Personas](#coach-personas)
@@ -24,6 +25,7 @@ This system tells you in real time how to adapt and fix it, adjusted to your ski
 - [streaming-telemetry-server](#streaming-telemetry-server)
 - [koru-application](#koru-application)
 - [Tech Stack](#tech-stack)
+- [Data Reasoning Documentation](docs/data-reasoning.md)
 
 ---
 
@@ -31,16 +33,21 @@ This system tells you in real time how to adapt and fix it, adjusted to your ski
 
 ### Data Reasoning
 
-- [ ] **Timing state machine** — Replace the simple cooldown (`if now - lastTime < 1500ms return`) with a state machine (OPEN → DELIVERING → COOLDOWN → BLACKOUT). Enforce silence during mid-corner and apex phases to prevent cognitive overload. This is a safety feature.
-- [ ] **Priority queue** — Ensure safety-critical messages (BRAKE, OVERSTEER_RECOVERY) always preempt lower-priority coaching (technique tips, compliments). Currently all messages share the same cooldown with no priority ranking.
-- [ ] **Driver model** — Classify driver skill from telemetry signals (input smoothness, lap time consistency, brake point variance) and adjust coaching thresholds per skill level. Currently the system coaches all drivers identically.
-- [ ] **Automate coaching validation** — The Replay page already parses CSV and runs frames through the coaching engine (hot/cold/feedforward). Build automated tests that replay Sonoma CSV files and assert coaching rules trigger at the correct corners and moments.
+- [x] **Timing state machine** — OPEN → DELIVERING → COOLDOWN → BLACKOUT. Enforces silence during mid-corner/apex. P0 safety messages bypass all states. Configurable per skill level.
+- [x] **Priority queue** — P0 (safety: BRAKE, OVERSTEER_RECOVERY) preempts all. P1 tactical, P2 strategic, P3 encouragement. Max 5 items, 3s stale expiry.
+- [x] **Driver model** — Classifies skill from input smoothness + coasting ratio. Time-based 10s rolling window (robust to 8Hz-25Hz data rates). 5s hysteresis before level change. Adapts cooldown, blackout, and cold path prompts per skill level.
+- [x] **Coaching knowledge enrichment** — Ross Bentley mental models (friction circle, weight transfer, trail braking, vision, maintenance throttle). 4 new coaching rules (EARLY_THROTTLE, LIFT_MID_CORNER, SPIKE_BRAKE, COGNITIVE_OVERLOAD). Skill-adapted humanization (beginner: feel-based, advanced: data-driven). Session progression (phases 1-3 suppress advanced techniques early). Skill-aware cold path prompts.
+- [x] **Test infrastructure** — Vitest with 42 tests: unit tests for geoUtils, CornerPhaseDetector, TimingGate, CoachingQueue, DriverModel, DecisionMatrix. Sonoma CSV integration test with synthetic fixture.
 
 ### Edge / Telemetry
 
-- [ ] **Understand hardware and data sources** — Document exactly what the Racelogic Mini (20Hz GPS) and OBDLink MX (CAN bus) provide on the Pixel 10. Map which TelemetryFrame fields come from hardware vs which are derived by telemetryStreamService (virtual brake/throttle from G-forces, heading from lat/lon deltas).
+- [ ] **Data fusion and time sync** — Implement cross-correlation calibration (hard throttle blip → RPM spike vs IMU G spike) to align RaceBox GPS epoch timestamps with Android SystemClock. Expected offset: 20-80ms. Upsample OBD channels (5-8Hz) to RaceBox rate (25Hz) via linear interpolation (continuous) and zero-order hold (discrete).
 - [ ] **Pre-rendered MP3s for safety-critical actions** — Record or source audio clips for BRAKE, OVERSTEER_RECOVERY, COMMIT per coach persona. The audioService already supports AudioContext pre-caching; this needs the actual MP3 files and integration to bypass TTS latency for time-critical calls.
-- [ ] **Bluetooth/USB telemetry bridge** — Define how the Pixel 10 receives data from Racelogic Mini and OBDLink MX. Serial? Bluetooth? WiFi direct? This determines the streaming-telemetry-server deployment model (on-device vs separate).
+- [ ] **Bluetooth telemetry bridge** — RaceBox Mini connects via BLE 5.2 (7.5-15ms latency at high priority). OBDLink MX+ connects via Bluetooth Classic 3.0. Both streams must run in an Android foreground Service with persistent notification. Call `requestConnectionPriority(CONNECTION_PRIORITY_HIGH)` on RaceBox immediately after connecting.
+- [ ] **VehicleDataStream interface** — Abstract the OBD source behind a common interface so the coaching engine never changes when upgrading from OBD to CAN bus. Path A (OBDLink MX+ K-Line) and Path B (CANable 2.0 direct CAN) both implement the same callbacks.
+- [ ] **Mocked data stream API** — Rabimba to deploy a throttled API endpoint providing synthetic telemetry streams. Enables pipeline development before the field test. All teams should validate their ingestion against this endpoint.
+- [ ] **CAN-to-USB ingestion (Team 2)** — Team 2 BMW E46 will have direct CAN-to-USB access (decision: Apr 14). Plan software strategy for hardwired CAN ingestion at 100+ Hz, bypassing Bluetooth multiplexing.
+- [ ] **Dual Bluetooth stability test (All Teams)** — Test simultaneous streaming from RaceBox Mini (BLE 5.2) and OBD sensors (BT Classic 3.0) to verify connection stability and stack multiplexing on Pixel 10.
 
 ### AGY Pipeline
 
@@ -60,6 +67,54 @@ This system tells you in real time how to adapt and fix it, adjusted to your ski
 - [ ] **Corner-specific coaching** — Integrate real coach knowledge (T-Rod session notes, Ross Bentley curriculum) into feedforward path for known tracks. For unknown tracks, determine whether telemetry-only analysis is sufficient or human coaching input is required.
 - [ ] **Two-way conversational dialog** — Enable real-time back-and-forth between the driver and the AI coach. This is the pinnacle for advanced drivers, where coaching becomes a discussion about minute nuances, setup adjustments, and driving strategy rather than one-way instructions.
 - [ ] **Native Android app** — Move from PWA to a native Android application on the Pixel 10. Native access to Bluetooth/USB for direct hardware communication, background audio, and on-device Gemma 4 inference without browser limitations.
+
+---
+
+## Hardware Stack
+
+All teams share a common compute and sensor platform. Car-specific adapters vary by team.
+
+### Common Stack (All Teams)
+
+| Device | Role | Connection | Data Rate |
+|--------|------|------------|-----------|
+| **Pixel 10** | Compute gateway, audio output, edge AI inference | — | — |
+| **RaceBox Mini** | 25Hz GPS + IMU (position, speed, heading, lateral/longitudinal G) | BLE 5.2 | 25 Hz, 7.5-15ms latency |
+| **OBDLink MX+** | Standard OBD-II adapter (RPM, speed, pedal position, coolant temp) | Bluetooth Classic 3.0 | 5-8 Hz effective |
+
+### Team Cars
+
+| Team | Car | OBD Path | Notes |
+|------|-----|----------|-------|
+| **Team 1 (Beginner)** | 2024 Subaru GR86 (automatic) | DauntlessOBD Enhanced + Hachi ASC CAN | Full CAN access, 100-500 kbps |
+| **Team 2 (Intermediate)** | BMW E46 M3 (MSS54HP) | OBDLink MX+ K-Line (Path A) or CANable 2.0 direct CAN (Path B) | K-Line limited to 10.4 kbaud, 9 channels |
+| **Team 3 (Pro)** | Honda S2000 AP2 | MoTec system (separate sync) | Pro data unit handled by T-Rod |
+
+### Data Channel Tiers
+
+Coaching capability scales with available data channels:
+
+| Tier | Channels | Coaching Capability |
+|------|----------|-------------------|
+| **Tier 1 (Beginner)** | GPS + IMU + RPM + Speed | Lap time delta, brake markers, apex location, corner speed |
+| **Tier 2 (Enthusiast)** | + Pedal position + Coolant temp + Oil temp | Throttle commitment, safety alerts (S54 >105°C coolant, >130°C oil) |
+| **Tier 3 (Professional)** | + Wheel speeds x4 + Steering angle + Brake state | Traction circle utilisation, slip ratio, ABS map, trail braking quality |
+
+### Latency Budget
+
+Total budget from telemetry event to audio coaching: **300-500ms**.
+
+```
+RaceBox BLE → Pixel 10:     7.5 - 15 ms
+OBD K-Line round-trip:      80 - 150 ms (vehicle-side, cannot reduce)
+Android BLE → fusion:       5 - 10 ms
+AI inference (hot path):    < 50 ms
+TTS audio output:           50 - 200 ms
+                            ─────────────
+Total:                      ~200 - 425 ms
+```
+
+> "Feedback 800ms late is worse than silence." — Brian Luc, Mentorship Session 1
 
 ---
 
