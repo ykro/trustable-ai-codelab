@@ -27,7 +27,7 @@ OUTPUT FORMAT:
 ### Analysis
 [Detailed explanation using markdown]`;
 
-    return this.callApi('gemini-2.0-flash', prompt);
+    return this.callApi('gemini-2.5-flash-lite', prompt);
   }
 
   /** Deep lap analysis with Pro + thinking */
@@ -50,7 +50,7 @@ Analyze the lap. For each issue found:
 **Telemetry Evidence:** [data reference]
 **Fix:** [actionable instruction]`;
 
-    return this.callApi('gemini-2.0-flash', prompt);
+    return this.callApi('gemini-2.5-flash-lite', prompt);
   }
 
   private async callApi(model: string, prompt: string, generationConfig?: Record<string, unknown>): Promise<string> {

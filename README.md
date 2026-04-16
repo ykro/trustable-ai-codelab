@@ -142,7 +142,7 @@ The coaching engine routes decisions through three paths based on urgency:
        │    "Trail brake!" "Commit!" "Brake!"
        │    No cloud round-trip. Fires on threshold violations.
        │
-       ├──► COLD PATH (Gemini Flash, 2-5s)
+       ├──► COLD PATH (Gemini 2.5 Flash Lite, 2-5s)
        │    Multi-frame telemetry analysis with physics context.
        │    "You're lifting early in T5 — trust the grip through mid-corner."
        │
@@ -172,6 +172,8 @@ Five AI personas with different communication styles. Switch mid-session.
 - Node.js 20+
 - Python 3.10+
 - A [Gemini API key](https://aistudio.google.com/apikey) (optional, hot path works without it)
+
+> **Note:** The original lab used `gemini-2.0-flash` which is now deprecated ([deprecation schedule](https://ai.google.dev/gemini-api/docs/deprecations)). Updated to `gemini-2.5-flash-lite` for cold path and analysis.
 
 ### 1. Start the Telemetry Server
 
