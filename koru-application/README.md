@@ -36,7 +36,7 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5175`. You'll see the landing page. Click **Open Dashboard** to get into the app.
+Open `http://localhost:5173`. You'll see the landing page. Click **Open Dashboard** to get into the app.
 
 ### Gemini API key
 
