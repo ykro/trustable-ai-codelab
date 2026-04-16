@@ -42,7 +42,7 @@ export const useGeminiCloud = () => {
       setStatus(prev => ({ ...prev, state: 'loading', error: undefined }));
 
       try {
-        const modelName = model === 'pro' ? 'gemini-2.0-flash' : 'gemini-2.0-flash';
+        const modelName = model === 'pro' ? 'gemini-2.5-flash-lite' : 'gemini-2.5-flash-lite';
 
         const prompt = model === 'pro'
           ? `You are an Elite Driver Coach.
