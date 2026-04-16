@@ -1,4 +1,4 @@
-import type { TelemetryFrame, CoachAction, Corner, Track, CoachingDecision, CornerPhase } from '../types';
+import type { TelemetryFrame, CoachAction, Corner, Track, CoachingDecision, CornerPhase, SessionGoal } from '../types';
 import { COACHES, DEFAULT_COACH, DECISION_MATRIX, RACING_PHYSICS_KNOWLEDGE } from '../utils/coachingKnowledge';
 import { haversineDistance, isValidGps } from '../utils/geoUtils';
 import { CornerPhaseDetector } from './cornerPhaseDetector';
@@ -15,6 +15,7 @@ const ACTION_PRIORITY: Map<string, 0 | 1 | 2 | 3> = new Map([
   ['EARLY_THROTTLE', 1], ['LIFT_MID_CORNER', 1], ['SPIKE_BRAKE', 1],
   ['COGNITIVE_OVERLOAD', 2],
   ['PUSH', 3], ['FULL_THROTTLE', 3], ['MAINTAIN', 3], ['COAST', 3], ['HESITATION', 3],
+  ['HUSTLE', 3],
 ]);
 
 function actionPriority(action: CoachAction): 0 | 1 | 2 | 3 {
@@ -51,6 +52,10 @@ export class CoachingService {
   private track: Track | null = null;
   private lastSkillLevel: import('../types').SkillLevel = 'BEGINNER';
   private lastCognitiveCheck = 0;
+  private lastHustleCheck = 0;
+
+  // Session goals (Phase 6.2 — populated by pre-race chat or auto-generated)
+  private sessionGoals: SessionGoal[] = [];
 
   // Session progression
   private sessionPhase: 1 | 2 | 3 = 1;
@@ -72,6 +77,22 @@ export class CoachingService {
   getTimingState() { return this.timingGate.getState(); }
   getCornerPhase() { return this.currentPhase; }
   getDriverState() { return this.driverModel.getState(); }
+  getSessionGoals() { return this.sessionGoals; }
+
+  /**
+   * Set session goals (Phase 6.2).
+   * Called before session starts — either from pre-race chat UI (Rabimba/UX)
+   * or auto-generated from driver profile + track knowledge.
+   *
+   * Goals bias the hot path: prioritizedActions in goals get boosted.
+   * Max 3 goals per session (Ross Bentley: "1-3 specific physical changes").
+   *
+   * TODO: UX team (Rabimba) builds pre-race chat that calls this method.
+   * TODO: Auto-generation from DriverProfile when persistence layer is ready (AGY Pipeline).
+   */
+  setSessionGoals(goals: SessionGoal[]): void {
+    this.sessionGoals = goals.slice(0, 3);
+  }
 
   onCoaching(cb: CoachingCallback) {
     this.listeners.push(cb);
@@ -102,6 +123,7 @@ export class CoachingService {
     // Run coaching paths (enqueue decisions)
     this.runHotPath(frame);
     this.checkCognitiveOverload(frame);
+    this.checkHustle(frame);
     this.runFeedforward(frame);
     void this.runColdPath(frame);
 
@@ -219,23 +241,60 @@ export class CoachingService {
     }
   }
 
+  /**
+   * Detect lazy throttle application on exits (Ross Bentley "hustle zones").
+   * Drivers get lazy mid-session — brain says "why go to 100% for 2 seconds?"
+   * But that last 10-15% throttle matters for exit speed onto straights.
+   * Fires every 8 seconds when on straight/acceleration with throttle 50-92%.
+   * Beginner-focused: only fires for BEGINNER skill level.
+   */
+  private checkHustle(frame: TelemetryFrame): void {
+    if (frame.time - this.lastHustleCheck < 8) return;
+    if (this.driverModel.getSkillLevel() !== 'BEGINNER') return;
+
+    const onExit = this.currentPhase === 'ACCELERATION' || this.currentPhase === 'STRAIGHT';
+    const lazyThrottle = frame.throttle > 50 && frame.throttle < 92;
+    const movingFast = frame.speed > 40;
+    const lowLateralG = Math.abs(frame.gLat) < 0.3;
+
+    if (onExit && lazyThrottle && movingFast && lowLateralG) {
+      this.lastHustleCheck = frame.time;
+      this.coachingQueue.enqueue({
+        path: 'hot',
+        action: 'HUSTLE',
+        text: this.humanizeAction('HUSTLE', frame),
+        priority: 3,
+        cornerPhase: this.currentPhase,
+        timestamp: Date.now(),
+      });
+    }
+  }
+
   /** Convert action enum to coaching phrase — context-aware and persona-specific */
   private humanizeAction(action: CoachAction, frame: TelemetryFrame): string {
     const skillLevel = this.driverModel.getSkillLevel();
 
     // Skill-adapted phrases for key actions (override persona for clarity)
+    // Beginner phrases: T-Rod feel-based + Ross Bentley trigger phrases
+    // Ross Bentley coaching pedagogy: short, actionable, feel-based for beginners
+    // "Do this, do this now" — direct commands, no jargon (00:28:56)
     if (skillLevel === 'BEGINNER') {
       switch (action) {
         case 'TRAIL_BRAKE': return 'Hold a little brake as you turn in.';
-        case 'BRAKE': return frame.speed > 80 ? 'Brake now!' : 'Start braking.';
+        case 'BRAKE': return frame.speed > 80 ? 'Brake! Hard initial!' : 'Start braking — squeeze it.';
+        case 'THRESHOLD': return 'Harder initial! Squeeze the brakes faster.';
         case 'COMMIT': return 'Commit! Full throttle now — the car can take it.';
         case 'THROTTLE': return 'Gently add gas now.';
         case 'COAST': return 'Pick a pedal — gas or brake. Stay committed!';
         case 'OVERSTEER_RECOVERY': return 'Easy! Straighten the wheel gently!';
         case 'EARLY_THROTTLE': return 'Wait for it... wait... NOW! Full throttle.';
         case 'LIFT_MID_CORNER': return 'Keep a little gas on through the turn — don\'t lift!';
-        case 'SPIKE_BRAKE': return 'Smoother on the brakes — squeeze, then slowly release.';
+        case 'SPIKE_BRAKE': return 'Smoother on the brakes — squeeze, don\'t stab.';
         case 'COGNITIVE_OVERLOAD': return 'Feeling busy? Just focus on your marks this lap.';
+        case 'HESITATION': return 'Trust the car — commit!';
+        case 'HUSTLE': return 'Hustle! Squirt the throttle — full send!';
+        case 'PUSH': return 'Eyes up! Look further ahead.';
+        case 'FULL_THROTTLE': return 'Full throttle — stay flat!';
       }
     }
 
@@ -252,6 +311,7 @@ export class CoachingService {
         case 'LIFT_MID_CORNER': return `Lift detected mid-corner. Maintenance throttle.`;
         case 'SPIKE_BRAKE': return `Brake spike — ${frame.brake.toFixed(0)}% at ${Math.abs(frame.gLong).toFixed(1)}G. Squeeze, don't stab.`;
         case 'COGNITIVE_OVERLOAD': return 'Reset. Smooth lap, no heroics.';
+        case 'HUSTLE': return `Throttle ${frame.throttle.toFixed(0)}% on exit. Commit 100%.`;
       }
     }
 
@@ -293,6 +353,7 @@ export class CoachingService {
         case 'LIFT_MID_CORNER': return 'Don\'t lift. Maintenance throttle.';
         case 'SPIKE_BRAKE': return 'Squeeze. Not stab.';
         case 'COGNITIVE_OVERLOAD': return 'Reset. Smooth lap.';
+        case 'HUSTLE': return 'Hustle. Full throttle.';
       }
     }
 
@@ -333,6 +394,7 @@ export class CoachingService {
         case 'LIFT_MID_CORNER': return 'Lift mid-corner shifts weight forward — maintain throttle.';
         case 'SPIKE_BRAKE': return 'Brake input too aggressive — the trace should be a ski slope, not a cliff.';
         case 'COGNITIVE_OVERLOAD': return 'Cognitive saturation. Focus on one thing — smoothness.';
+        case 'HUSTLE': return `Exit throttle ${frame.throttle.toFixed(0)}% — commit to 100%. Tire load demands it.`;
       }
     }
 
@@ -369,6 +431,7 @@ export class CoachingService {
         case 'LIFT_MID_CORNER': return 'Don\'t lift! Keep a little gas on!';
         case 'SPIKE_BRAKE': return 'Squeeze those brakes — smooth is fast!';
         case 'COGNITIVE_OVERLOAD': return 'Take a breath — one thing at a time!';
+        case 'HUSTLE': return 'Hustle! Squirt the throttle — full send!';
       }
     }
 
@@ -401,6 +464,7 @@ export class CoachingService {
         case 'LIFT_MID_CORNER': return `Lift detected. G-Lat: ${gLat.toFixed(2)}. Maintain 10-20% throttle.`;
         case 'SPIKE_BRAKE': return `Brake spike: ${brake.toFixed(0)}% at ${Math.abs(gLong).toFixed(1)}G. Modulate.`;
         case 'COGNITIVE_OVERLOAD': return 'Input variance high. Simplify.';
+        case 'HUSTLE': return `Exit throttle: ${frame.throttle.toFixed(0)}%. Target: 100%. Commit.`;
       }
     }
 
@@ -444,6 +508,7 @@ export class CoachingService {
       case 'LIFT_MID_CORNER': return 'Don\'t lift mid-corner — keep a bit of throttle!';
       case 'SPIKE_BRAKE': return 'Easy on the brakes — squeeze, don\'t slam!';
       case 'COGNITIVE_OVERLOAD': return 'Slow down mentally — focus on smooth inputs.';
+      case 'HUSTLE': return 'Hustle! Get on that throttle — full commit!';
     }
 
     return action;
