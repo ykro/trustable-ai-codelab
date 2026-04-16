@@ -89,6 +89,8 @@ See [`docs/data-reasoning.md`](docs/data-reasoning.md) for detailed feature docu
 
 ### UX / Frontend
 
+- [ ] **Update CoachPanel to show coaching metadata** — CoachPanel currently shows only `path` and `text`. Update to display priority badge (P0-P3), action name, and corner phase from `CoachingDecision`. This makes the Data Reasoning layer visible in the UI.
+- [ ] **Pre-race chat UI** — Build a pre-session goal-setting interface (form or conversational). Output: array of `SessionGoal` objects passed to `coachingService.setSessionGoals()`. See integration contract: `docs/pre-race-chat-contract.md`. Max 3 goals, beginner-focused.
 - [ ] **Convert to PWA** — Add service worker and manifest for offline support. The hot path and feedforward already run client-side; PWA ensures the UI loads without network at the track.
 - [ ] **Minimal HUD for track use** — Design a signal-light-only visual (green/yellow/red) for in-car use. The driver cannot look at a screen; audio is primary, but a peripheral color signal adds confirmation without distraction.
 - [ ] **Coach persona selection UX** — Evaluate whether mid-session coach switching is useful or distracting. Consider recommending a persona based on driver skill level from the driver model.
