@@ -5,6 +5,7 @@ import { CornerPhaseDetector } from './cornerPhaseDetector';
 import { TimingGate } from './timingGate';
 import { CoachingQueue } from './coachingQueue';
 import { DriverModel } from './driverModel';
+import { PerformanceTracker } from './performanceTracker';
 
 /** Safety actions that bypass blackout and cooldown */
 const SAFETY_ACTIONS: Set<CoachAction> = new Set(['OVERSTEER_RECOVERY', 'BRAKE']);
@@ -48,6 +49,7 @@ export class CoachingService {
   private timingGate = new TimingGate();
   private coachingQueue = new CoachingQueue();
   private driverModel = new DriverModel();
+  private performanceTracker = new PerformanceTracker();
   private currentPhase: CornerPhase = 'STRAIGHT';
   private track: Track | null = null;
   private lastSkillLevel: import('../types').SkillLevel = 'BEGINNER';
@@ -78,6 +80,10 @@ export class CoachingService {
   getCornerPhase() { return this.currentPhase; }
   getDriverState() { return this.driverModel.getState(); }
   getSessionGoals() { return this.sessionGoals; }
+  getPerformanceTracker() { return this.performanceTracker; }
+
+  /** Call when a new lap starts (e.g. from lap detection logic) */
+  newLap(): void { this.performanceTracker.newLap(); }
 
   /**
    * Set session goals (Phase 6.2).
@@ -109,6 +115,13 @@ export class CoachingService {
     // Detect corner phase
     const detection = this.cornerDetector.detect(frame);
     this.currentPhase = detection.phase;
+
+    // Track per-corner performance (Phase 6.4)
+    const improvement = this.performanceTracker.update(
+      frame, this.currentPhase,
+      detection.cornerId ?? null, detection.cornerName ?? null,
+    );
+    if (improvement) this.coachingQueue.enqueue(improvement);
 
     // Update timing gate with current phase
     this.timingGate.update(this.currentPhase);
