@@ -106,6 +106,9 @@ export class CoachingService {
   }
 
   private emit(msg: CoachingDecision) {
+    // TODO: Remove when CoachPanel displays priority/action/phase metadata
+    const pri = ['🔴P0', '🟠P1', '🔵P2', '⚪P3'][msg.priority] ?? `P${msg.priority}`;
+    console.log(`[COACH] ${pri} ${msg.action ?? msg.path} | ${msg.cornerPhase} | ${msg.text}`);
     this.timingGate.startDelivery();
     this.listeners.forEach(cb => cb(msg));
   }
@@ -155,6 +158,8 @@ export class CoachingService {
   private adaptToSkillLevel(): void {
     const level = this.driverModel.getSkillLevel();
     if (level === this.lastSkillLevel) return;
+    // TODO: Remove when CoachPanel displays driver state metadata
+    console.log(`[DRIVER] Skill level changed: ${this.lastSkillLevel} → ${level}`);
     this.lastSkillLevel = level;
 
     switch (level) {
