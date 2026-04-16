@@ -212,7 +212,7 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5175`. Click **Open Dashboard** to enter the app.
+Open `http://localhost:5173`. Click **Open Dashboard** to enter the app.
 
 ### 3. Configure Gemini (optional)
 
