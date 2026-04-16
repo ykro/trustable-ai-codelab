@@ -284,4 +284,101 @@ The CSV fixture uses TrackAddict column format (`Speed (MPH)`, `Accel X`, `Accel
  Cold Path (Gemini Flash) ──► skill-adapted prompt ──► enqueue P2
        │
  Feedforward (geofence) ──► corner advice ──► enqueue P1
+       │
+ PerformanceTracker ──► per-corner metrics ──► improvement P3
 ```
+
+---
+
+## Phase 6: Session Intelligence
+
+### Hustle Detection (5.4 mod)
+
+**File:** `src/services/coachingService.ts` → `checkHustle()`
+
+Ross Bentley insight: drivers get lazy mid-session. The brain says "why go to 100% throttle for 2 seconds?" But that last 10-15% matters for exit speed.
+
+Detects when a beginner driver is on a straight/acceleration zone with throttle between 50-92% (not fully committed). Fires every 8 seconds with P3 encouragement: "Hustle! Squirt the throttle — full send!"
+
+Only fires for BEGINNER skill level — advanced drivers manage throttle commitment intentionally.
+
+### Ross Bentley Trigger Phrases (5.3 mod)
+
+Beginner humanization enriched with Ross Bentley's standardized coaching vocabulary:
+
+| Action | Trigger Phrase | Ross Bentley Source |
+|--------|---------------|---------------------|
+| BRAKE | "Hard initial!" | Harder initial brake application (01:14:27) |
+| SPIKE_BRAKE | "Squeeze, don't stab" | Brake trace quality — ski slope not cliff |
+| PUSH | "Eyes up!" | Vision drives the car |
+| HUSTLE | "Squirt the throttle!" | Lazy throttle on exits (00:25:31) |
+| HESITATION | "Trust the car — commit!" | Self-preservation detection (00:16:05) |
+
+These phrases are short, standardized, and build a common vocabulary between AI coach and driver — exactly the approach Ross used with the Garmin Catalyst team (00:34:09).
+
+### Pre-Session Goal Setting (Phase 6.2)
+
+**File:** `src/types.ts` → `SessionGoal`, `src/services/coachingService.ts` → `setSessionGoals()`
+
+Placeholder for pre-race chat integration. The UX team (Rabimba) builds the chat UI; Data Reasoning consumes the goals.
+
+Ross Bentley: "1-3 specific physical changes per session" (01:23:15). Max 3 goals enforced.
+
+```typescript
+interface SessionGoal {
+  id: string;
+  focus: 'braking' | 'throttle' | 'vision' | 'lines' | 'smoothness' | 'custom';
+  description: string;
+  source: 'pre_race_chat' | 'auto_generated' | 'coach_assigned';
+  prioritizedActions?: CoachAction[];  // Hot path rules to boost
+}
+```
+
+**TODO:** UX team implements pre-race chat → calls `coachingService.setSessionGoals()`.
+**TODO:** Auto-generation from DriverProfile when persistence layer is ready.
+
+### Cross-Session Driver Profile (Phase 6.3)
+
+**File:** `src/types.ts` → `DriverProfile`, `DriverProfileStore`
+
+Interface for persisting driver data across sessions. The persistence layer (IndexedDB/localStorage/cloud) is owned by AGY Pipeline. Data Reasoning defines what to store and how to read/write.
+
+```typescript
+interface DriverProfileStore {
+  load(driverId: string): Promise<DriverProfile | null>;
+  save(profile: DriverProfile): Promise<void>;
+  addSession(driverId: string, summary: SessionSummary): Promise<void>;
+}
+```
+
+Ross Bentley: "The more I learn about the driver, the more effective I get" (00:27:56).
+
+**What gets persisted:**
+- Skill level history
+- Per-corner performance (min speed, brake point, throttle %)
+- Problem corners (consistently trigger coaching messages)
+- Session goals and achievement
+
+**Status:** Interfaces defined. Awaiting AGY Pipeline persistence backend.
+
+### In-Session Performance Tracking (Phase 6.4)
+
+**File:** `src/services/performanceTracker.ts`
+
+Tracks per-corner metrics within a single session (no persistence needed):
+
+| Metric | How | Use |
+|--------|-----|-----|
+| Min speed | Track minimum speed through each corner pass | Detect carrying more speed |
+| Entry/exit speed | Speed at corner entry and exit | Detect improvement on exits |
+| Max brake | Peak brake percentage per corner | Detect harder initial application |
+| Max throttle | Peak throttle per corner | Detect better throttle commitment |
+
+**Lap-over-lap comparison:** When exit speed improves by 2+ mph or min speed by 1+ mph, emits a P3 encouragement: *"Nice improvement! Exit speed up 3 mph!"*
+
+Ross Bentley: "Drivers want to see improvements" — visible progress is a strong motivator.
+
+**Limitations without persistence layer:**
+- Can only compare within a session (lap-over-lap)
+- Cannot say "Last week you struggled with Turn 7, today you nailed it"
+- Cross-session trends require AGY Pipeline persistence (Phase 6.3)
