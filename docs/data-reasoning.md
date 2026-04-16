@@ -211,11 +211,11 @@ npm install
 npm test
 ```
 
-This runs `vitest run` and executes all 42 tests across 7 test files:
+This runs `vitest run` and executes all 60 tests across 9 test files:
 
 ```
- Test Files  7 passed (7)
-      Tests  42 passed (42)
+ Test Files  9 passed (9)
+      Tests  60 passed (60)
 ```
 
 ### Test files
@@ -228,7 +228,9 @@ This runs `vitest run` and executes all 42 tests across 7 test files:
 | `src/services/__tests__/timingGate.test.ts` | State machine transitions, blackout, cooldown | 4 |
 | `src/services/__tests__/coachingQueue.test.ts` | Priority sorting, stale expiry, preempt | 4 |
 | `src/services/__tests__/driverModel.test.ts` | Skill classification, smoothness | 3 |
-| `src/__tests__/sonomaReplay.test.ts` | **Integration:** CSV parse → phase detect → coaching | 4 |
+| `src/services/__tests__/performanceTracker.test.ts` | Corner metrics, improvement detection, trends | 8 |
+| `src/services/__tests__/coachingServicePhase6.test.ts` | HUSTLE, session goals, Ross Bentley phrases | 10 |
+| `src/__tests__/sonomaReplay.test.ts` | **Integration:** CSV parse → phase detect → coaching | 5 |
 
 ### Run a specific test file
 
