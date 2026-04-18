@@ -1,8 +1,12 @@
 # User Stories — Cross-Team Work Items
 
-Companion to the [Roadmap in the README](../README.md#roadmap). This document translates the TODOs for the **Edge/Telemetry**, **AGY Pipeline**, **UX/Frontend**, and **Future Work** tracks into user stories with acceptance criteria, so each team can pick up an item and know what "done" looks like.
+Companion to the [Roadmap in the README](../README.md#roadmap). This document translates the TODOs for the **Edge/Telemetry**, **AGY Pipeline**, and **UX/Frontend** tracks into user stories with acceptance criteria, so each team can pick up an item and know what "done" looks like.
 
-**Scope:** This file covers work owned by teams *other than* Data Reasoning. For Data Reasoning stories, the work is tracked directly in `docs/data-reasoning.md` on the `data-reasoning` branch.
+**Scope:** This file covers work owned by teams *other than* Data Reasoning. For Data Reasoning stories, the work is tracked directly in `docs/data-reasoning.md` on the `data-reasoning` branch. *Future Work* items in the README are intentionally out of scope here — they are exploratory and will get stories once they become committed work.
+
+**Platform assumption:** The coaching app is a **Progressive Web App** running in the browser on a Pixel 10 (Vite + React, becoming a full PWA per UX-3). There is no native Android app today. Stories that touch Bluetooth, USB, or background execution use browser-level APIs (Web Bluetooth, WebUSB, Service Worker, Wake Lock) or a tethered companion process — **not** Android `Service` primitives.
+
+> **Web Bluetooth gotcha:** Web Bluetooth supports BLE only, not Bluetooth Classic. The RaceBox Mini (BLE 5.2) works; the OBDLink MX+ (BT Classic 3.0) does **not** connect via Web Bluetooth. Any story involving the OBDLink must either go through a tethered process that talks BT Classic, or switch to the OBDLink's USB interface via WebUSB. Flag this when you pick an architecture.
 
 **Primary user:** Beginner driver in a 2024 Subaru GR86, first time on a real road course (Sonoma Raceway, May 23). Every story assumes this persona unless stated otherwise.
 
@@ -15,7 +19,6 @@ Companion to the [Roadmap in the README](../README.md#roadmap). This document tr
 - [Edge / Telemetry](#edge--telemetry)
 - [AGY Pipeline](#agy-pipeline)
 - [UX / Frontend](#ux--frontend)
-- [Future Work](#future-work)
 
 ---
 
@@ -56,17 +59,18 @@ Companion to the [Roadmap in the README](../README.md#roadmap). This document tr
 
 ---
 
-### ET-3 — Dual Bluetooth validation on Pixel 10
+### ET-3 — Dual Bluetooth validation
 
 **As a** field engineer setting up the car before a session,
-**I want** to confirm that the Pixel 10 can simultaneously stream from RaceBox Mini (BLE 5.2) and OBDLink MX+ (BT Classic 3.0),
-**so that** I know the phone will not drop one device mid-session at Sonoma.
+**I want** to confirm that our PWA ingestion path can simultaneously pull data from RaceBox Mini (BLE 5.2) and OBDLink MX+ (BT Classic 3.0),
+**so that** I know we will not drop one device mid-session at Sonoma.
 
 **Acceptance criteria:**
-- Written test procedure: pair both devices, start coaching app, drive a 20-minute session at Sonoma or equivalent.
+- Architecture decided first (documented in `docs/edge-architecture.md`): how does each BT device reach the PWA? Options include Web Bluetooth for the RaceBox (BLE) plus a tethered companion process for the OBDLink (BT Classic is not reachable from the browser), or a single tethered process that owns both.
+- Written test procedure: start the chosen ingestion path, open the PWA, drive a 20-minute session at Sonoma or equivalent.
 - Measured: frame drop rate per device over the session (target: < 1% dropped frames on either stream).
 - Pass criterion: no BT disconnection events in 3 consecutive test sessions.
-- If dual-BT fails, document fallback (e.g., RaceBox over USB-C, OBD over BT only).
+- If dual-BT fails, document fallback (e.g., OBDLink MX+ over its USB interface instead of BT Classic).
 - Results logged to `docs/hardware-validation.md` (create the doc).
 
 **Dependencies:** Physical access to both devices and the GR86. Blocks field test confidence.
@@ -83,7 +87,7 @@ Companion to the [Roadmap in the README](../README.md#roadmap). This document tr
 - USB CAN adapter selected (e.g., CANable 2.0) and purchased; decision logged in `docs/hardware-validation.md`.
 - Adapter emits frames behind the `VehicleDataStream` interface (see ET-8) so no coaching-engine code changes.
 - Frame rate measured: 100+ Hz sustained on the MSS54HP ECU CAN bus.
-- Pixel 10 recognizes the USB device; no root or custom kernel required.
+- USB path to the PWA documented: either **WebUSB** directly from the browser (if the adapter is compatible), or a **tethered companion process** that reads USB and proxies frames to the PWA over SSE. Decision logged with rationale.
 - Documented as Path B in the Edge architecture (Path A = OBDLink MX+ K-Line).
 
 **Dependencies:** ET-8 (VehicleDataStream interface). Team 2 availability for testing. Lower priority than Team 1 GR86 for the May 23 field test.
@@ -114,7 +118,7 @@ Companion to the [Roadmap in the README](../README.md#roadmap). This document tr
 **so that** I can correlate a throttle input with the G-force it produces without false offsets corrupting the driver model or decision matrix.
 
 **Acceptance criteria:**
-- Clock alignment: a cross-correlation calibration routine detects a synchronization event (e.g., hard throttle blip producing an RPM spike and a longitudinal G spike) and computes the offset between RaceBox GPS epoch and Android SystemClock.
+- Clock alignment: a cross-correlation calibration routine detects a synchronization event (e.g., hard throttle blip producing an RPM spike and a longitudinal G spike) and computes the offset between the RaceBox GPS epoch and the browser's monotonic clock (`performance.now()` or `Date.now()` — the one used to timestamp OBD frames as they arrive at the PWA).
 - Measured offset falls in the expected 20–80 ms range; calibration runs at session start and re-checks every N minutes (value documented).
 - OBD channels (5–8 Hz) are upsampled to the RaceBox rate (25 Hz) on the merged stream.
 - Continuous channels (throttle %, RPM) use linear interpolation; discrete channels (gear, brake boolean) use zero-order hold. Behavior documented per channel in `docs/session-schema.md`.
@@ -125,29 +129,25 @@ Companion to the [Roadmap in the README](../README.md#roadmap). This document tr
 
 ---
 
-### ET-7 — Resilient BT bridge with high-priority BLE
+### ET-7 — Resilient BT bridge that survives backgrounding
 
 **As a** driver with my Pixel 10 mounted in the car,
-**I want** the telemetry BT streams to keep running even if the screen locks or I switch apps briefly,
-**so that** I do not lose a lap of coaching because the OS suspended a background connection.
+**I want** the telemetry streams to keep running if the screen locks or I switch tabs briefly,
+**so that** I do not lose a lap of coaching because the browser throttled or suspended a background connection.
 
-**Context:** The current app is a PWA, not a native Android app. Implementation strategy depends on where the BT stack lives:
-- **Path 1 (PWA + Web Bluetooth)**: BT talks from the browser via Web Bluetooth API; keep-alive via `screen.wakeLock`, service worker, and installed-PWA permissions.
-- **Path 2 (PWA + tethered server)**: a companion process on the Pixel 10 (or a laptop) talks BT and proxies frames to the PWA over SSE — current `streaming-telemetry-server` pattern extended for BT.
-- **Path 3 (Native Android)**: a foreground `Service` with persistent notification owns the BT stack. Only applies if/when FW-5 ships.
-
-Pick one and document it in `docs/edge-architecture.md` before implementing. The acceptance criteria are the same regardless of path.
+**Context:** The app is a PWA. Two viable implementation paths — pick one and document in `docs/edge-architecture.md` before implementing:
+- **Path 1 (PWA + Web Bluetooth)**: RaceBox connects from the browser via Web Bluetooth. Keep-alive uses `navigator.wakeLock.request('screen')`, a service worker for the app shell, and installed-PWA mode. Does **not** work for the OBDLink MX+ (BT Classic not supported) — OBD must go through Path 2 or via the OBDLink's USB interface.
+- **Path 2 (PWA + tethered companion process)**: a companion process (Python/Node) running on the Pixel (Termux or similar) or on a laptop tethered to the Pixel talks BT/USB and proxies frames to the PWA over SSE — extends the current `streaming-telemetry-server` pattern.
 
 **Acceptance criteria:**
-- Decision recorded: which path (1, 2, or 3), with rationale.
-- Screen-lock stress test: 30 minutes of driving with screen locked, no user interaction — coaching continues, frame drops within the ET-3 baseline.
-- App backgrounding test: briefly switching to another app, then back — no reconnect required.
-- For the RaceBox Mini BLE 5.2 connection: the high-priority connection mode is requested immediately after `CONNECTED` (native Android: `requestConnectionPriority(CONNECTION_PRIORITY_HIGH)`; Web Bluetooth: document whichever equivalent is available, or state explicitly that the API does not expose this).
-- Measured BLE latency falls in the 7.5–15 ms band after the high-priority request (or the measured baseline is documented if the path cannot request it).
+- Decision recorded: which path, with rationale and how each BT/USB device is reached.
+- Screen-lock stress test: 30 minutes of driving with screen locked (or screen on but PWA backgrounded), no user interaction — coaching continues, frame drops within the ET-3 baseline.
+- Tab/app switch test: briefly switching to another app, then back — no reconnect required.
+- For the RaceBox Mini BLE 5.2 connection under Web Bluetooth: document whether the Chrome Web Bluetooth API exposes a connection-priority equivalent and the measured steady-state BLE latency (target band: 7.5–15 ms, or the measured baseline if the API cannot request high priority).
 - Reconnect logic: on unexpected disconnect, automatic reconnection within 5 seconds without user interaction.
-- Persistent visual indicator in the UI (PWA) or notification (native) shows connection status: connected / reconnecting / disconnected.
+- Persistent in-UI indicator shows connection status: connected / reconnecting / disconnected.
 
-**Dependencies:** ET-3 (dual-BT stability baseline). Path 3 depends on FW-5. Required for the May 23 field test in some form — decide and implement the path by then.
+**Dependencies:** ET-3 (dual-BT stability baseline), UX-3 (PWA installation required for reliable Wake Lock on screen lock). Required for the May 23 field test.
 
 ---
 
@@ -307,92 +307,6 @@ Pick one and document it in `docs/edge-architecture.md` before implementing. The
 - If mid-session switch is kept: switching does not drop any queued coaching messages.
 
 **Dependencies:** Driver model skill level (already available).
-
----
-
-## Future Work
-
-> These stories are intentionally lower-fidelity — they capture intent for post-field-test exploration, not commitments for May 23.
-
-### FW-1 — Cold path offline fallback
-
-**As a** driver at a track with no cell signal,
-**I want** the coach to still give context-rich multi-frame coaching without the cloud,
-**so that** my experience does not degrade to just the hot path at the track.
-
-**Acceptance criteria:**
-- Lookup table pre-computed per known track: key = `(cornerId, commonMistake)`, value = coaching text.
-- Coaching service tries cloud → lookup table → hot path, in that order.
-- Table entries derived from T-Rod notes + Ross Bentley Speed Secrets for Sonoma as the first track.
-- Evaluation: On-device Gemma 4 on Pixel 10 benchmarked as a possible upgrade over Gemini Nano; decision recorded.
-
-**Dependencies:** Known tracks with coaching data. Sonoma is the first candidate.
-
----
-
-### FW-2 — Track auto-detection
-
-**As a** driver at a track day at a venue we did not pre-load,
-**I want** the coach to detect corners automatically,
-**so that** I get coaching even on unknown circuits.
-
-**Acceptance criteria:**
-- Algorithm detects corners from heading change rate alone (no pre-loaded track data required).
-- Validated on 3 different tracks (1 pre-loaded, 2 unknown) with measured recall/precision for corner boundaries vs. a hand-labeled ground truth.
-- Performance: runs in the hot path budget (< 50 ms per frame).
-- Works on a first lap (no prior laps needed to bootstrap).
-
-**Dependencies:** None. Extends current `CornerPhaseDetector`.
-
----
-
-### FW-3 — Corner-specific coaching on known tracks
-
-**As a** driver at Sonoma with T-Rod's notes loaded,
-**I want** corner-specific advice delivered through feedforward,
-**so that** I get the real coaching value of a pro before I even reach the turn.
-
-**Acceptance criteria:**
-- Track data schema extended with per-corner coaching payload (the `advice` Ross or T-Rod would give).
-- Feedforward path (geofence 150 m pre-corner) delivers that payload when the driver approaches a known corner.
-- For unknown tracks: decision recorded on whether telemetry-only analysis is sufficient or if human-coach input is required to make feedforward useful.
-- Sonoma loaded as the first populated track.
-
-**Dependencies:** Coaching knowledge source (T-Rod notes, Ross material) converted to structured form.
-
----
-
-### FW-4 — Two-way conversational dialog
-
-**As an** advanced driver,
-**I want** to ask the coach "why did I lose time in T6?" mid-session,
-**so that** coaching becomes a dialog about nuance rather than one-way instructions.
-
-**Acceptance criteria:**
-- Voice-triggered input during the session (push-to-talk or wake word).
-- Dialog does not interrupt safety-critical coaching (P0 messages still preempt).
-- Response latency target: < 2 s from end-of-question to start-of-answer.
-- Conversation state persists across the current session and feeds into post-session review.
-- Intentionally scoped to advanced/professional drivers first — not a beginner feature.
-
-**Dependencies:** Stable cold path; likely Gemini Live API or equivalent.
-
----
-
-### FW-5 — Native Android app
-
-**As a** driver using the system daily,
-**I want** a native Android app instead of a PWA,
-**so that** I get background audio, direct Bluetooth/USB access, and on-device Gemma 4 without browser limits.
-
-**Acceptance criteria:**
-- Native app on Pixel 10 with feature parity to the PWA.
-- Direct BLE/BT Classic/USB access without browser Web Bluetooth limits.
-- Background audio survives screen lock and app backgrounding.
-- Gemma 4 runs on-device as the cold path.
-- Installable outside Play Store for pod distribution (sideload or internal channel).
-
-**Dependencies:** FW-1 (offline cold path) or equivalent on-device model.
 
 ---
 
