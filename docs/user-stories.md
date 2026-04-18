@@ -8,6 +8,8 @@ Companion to the [Roadmap in the README](../README.md#roadmap). This document tr
 
 > **Web Bluetooth gotcha:** Web Bluetooth supports BLE only, not Bluetooth Classic. The RaceBox Mini (BLE 5.2) works; the OBDLink MX+ (BT Classic 3.0) does **not** connect via Web Bluetooth. Any story involving the OBDLink must either go through a tethered process that talks BT Classic, or switch to the OBDLink's USB interface via WebUSB. Flag this when you pick an architecture.
 
+**Scope:** Team 1 Beginner Pod only. Stories tied to other teams or other cars are out of scope in this document.
+
 **Primary user:** Beginner driver in a 2024 Subaru GR86, first time on a real road course (Sonoma Raceway, May 23). Every story assumes this persona unless stated otherwise.
 
 **Convention:** Each story uses the format `As a [role], I want [capability], so that [benefit]`. Acceptance criteria are written so that a developer can self-verify without ambiguity.
@@ -77,32 +79,15 @@ Companion to the [Roadmap in the README](../README.md#roadmap). This document tr
 
 ---
 
-### ET-4 — CAN-to-USB bridge for BMW E46 (Team 2)
-
-**As a** Team 2 driver in the BMW E46 M3 (MSS54HP),
-**I want** vehicle data read directly over CAN via USB (CANable 2.0 or equivalent),
-**so that** I get raw CAN frame rates without the BT Classic multiplexing bottleneck and without being limited by the 10.4 kbaud K-Line ceiling.
-
-**Acceptance criteria:**
-- USB CAN adapter selected (e.g., CANable 2.0) and purchased; decision logged in `docs/hardware-validation.md`.
-- Adapter emits frames behind the `VehicleDataStream` interface (see ET-8) so no coaching-engine code changes.
-- Frame rate measured: 100+ Hz sustained on the MSS54HP ECU CAN bus.
-- USB path to the PWA documented: either **WebUSB** directly from the browser (if the adapter is compatible), or a **tethered companion process** that reads USB and proxies frames to the PWA over SSE. Decision logged with rationale.
-- Documented as Path B in the Edge architecture (Path A = OBDLink MX+ K-Line).
-
-**Dependencies:** ET-8 (VehicleDataStream interface). Team 2 availability for testing. Lower priority than Team 1 GR86 for the May 23 field test.
-
----
-
-### ET-5 — Steering angle channel
+### ET-4 — Steering angle channel
 
 **As a** data analyst reviewing a session post-facto,
 **I want** steering angle included in the telemetry stream,
-**so that** I can distinguish driver input from vehicle response (per Ross Bentley's Apr 15 request).
+**so that** I can distinguish driver input from vehicle response.
 
 **Acceptance criteria:**
 - Steering angle available as a field on the telemetry frame (`steeringAngle`, degrees, signed).
-- Source identified: OBD PID if available on GR86/E46; otherwise IMU-derived estimate with documented accuracy.
+- Source identified: OBD PID if available on the GR86; otherwise IMU-derived estimate with documented accuracy.
 - Field is `null` when unavailable, not zero (zero is a valid steering angle).
 - Schema update propagated to `TelemetryFrame` type in `koru-application`.
 - Replay CSV format includes the column.
@@ -111,7 +96,7 @@ Companion to the [Roadmap in the README](../README.md#roadmap). This document tr
 
 ---
 
-### ET-6 — Time sync and OBD upsampling
+### ET-5 — Time sync and OBD upsampling
 
 **As a** Data Reasoning engineer consuming a merged RaceBox + OBD frame,
 **I want** every frame to carry a single monotonic timestamp with GPS and OBD aligned to the same clock,
@@ -129,7 +114,7 @@ Companion to the [Roadmap in the README](../README.md#roadmap). This document tr
 
 ---
 
-### ET-7 — Resilient BT bridge that survives backgrounding
+### ET-6 — Resilient BT bridge that survives backgrounding
 
 **As a** driver with my Pixel 10 mounted in the car,
 **I want** the telemetry streams to keep running if the screen locks or I switch tabs briefly,
@@ -148,23 +133,6 @@ Companion to the [Roadmap in the README](../README.md#roadmap). This document tr
 - Persistent in-UI indicator shows connection status: connected / reconnecting / disconnected.
 
 **Dependencies:** ET-3 (dual-BT stability baseline), UX-3 (PWA installation required for reliable Wake Lock on screen lock). Required for the May 23 field test.
-
----
-
-### ET-8 — `VehicleDataStream` interface (OBD ↔ CAN swap)
-
-**As an** Edge engineer upgrading Team 2 from OBD over BT to direct CAN over USB,
-**I want** a single `VehicleDataStream` abstraction that both sources implement,
-**so that** the coaching engine never needs to change when a team moves from Path A (OBDLink MX+ K-Line) to Path B (CANable 2.0 direct CAN).
-
-**Acceptance criteria:**
-- Interface defined with the callbacks the coaching engine needs: `onFrame(TelemetryFrame)`, `onStatusChange(status)`, `onError(err)`, plus a lifecycle of `connect()` / `disconnect()`.
-- Two implementations behind the interface: Path A (OBDLink MX+ over BT Classic / K-Line PIDs) and Path B (CANable 2.0 over USB / direct CAN decoding).
-- Swapping implementations requires zero changes in `coachingService` or anything downstream — verified by the existing Data Reasoning test suite continuing to pass with either implementation.
-- Each implementation documents the channels it provides and their achievable rates (maps to the Data Channel Tiers table in the README).
-- A mock implementation for tests (already implicitly exists via the mocked data stream in ET-1, but now conforms to the same interface).
-
-**Dependencies:** ET-1 for mock implementation; unblocks ET-4 (Path B).
 
 ---
 

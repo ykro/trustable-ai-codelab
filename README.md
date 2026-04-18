@@ -72,7 +72,7 @@ See [`docs/data-reasoning.md`](docs/data-reasoning.md) for detailed feature docu
 | OBDLink MX+ | 5-8Hz OBD-II | BT Classic 3.0 | throttle, brake, RPM, gear, coolant |
 | Pixel 10 | — | USB-C / BT | Runs coaching app, Gemini Nano on-device |
 
-**Team cars:** Team 1 Beginner: 2024 Subaru GR86 (automatic, DauntlessOBD CAN). Team 2: BMW E46 (direct CAN-to-USB, bypassing BT multiplexing).
+**Team car:** 2024 Subaru GR86 (automatic, DauntlessOBD CAN) — Team 1 Beginner Pod.
 
 **Latency budget:** 300-500ms from event to audio. "Feedback 800ms late is worse than silence."
 
@@ -80,8 +80,7 @@ See [`docs/data-reasoning.md`](docs/data-reasoning.md) for detailed feature docu
 - [ ] **Mocked data stream API** — Rabimba deploying throttled API endpoint simulating RaceBox+OBD merged stream for pipeline development
 - [ ] **Pre-rendered MP3s for safety-critical actions** — Audio clips for BRAKE, OVERSTEER_RECOVERY, COMMIT per persona
 - [ ] **Dual BT test** — Validate BLE 5.2 (RaceBox) + BT Classic 3.0 (OBDLink) simultaneous on Pixel 10
-- [ ] **CAN-to-USB bridge for Team 2 BMW** — Direct CAN access bypassing BT multiplexing
-- [ ] **Steering angle channel** — Requested by Ross Bentley for data analysis (Apr 15 session)
+- [ ] **Steering angle channel** — OBD PID if available on the GR86; otherwise IMU-derived estimate
 
 ### AGY Pipeline
 
