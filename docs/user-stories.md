@@ -26,21 +26,32 @@ Companion to the [Roadmap in the README](../README.md#roadmap). This document tr
 
 ## Edge / Telemetry
 
-### ET-1 — Mocked merged telemetry stream API
+### ET-1 — Extend `streaming-telemetry-server` to emit the merged stream
 
 **As a** Data Reasoning engineer developing coaching logic off-track,
-**I want** a mocked HTTP/SSE endpoint that emits a merged RaceBox + OBD frame at realistic rates,
-**so that** I can iterate on the hot path and driver model without hardware and without physically being at Sonoma.
+**I want** the existing `streaming-telemetry-server` to emit the OBD + IMU channels already present in `SampleStream2024.csv` at realistic rates,
+**so that** I can iterate on the hot path and driver model against real telemetry shape — and we can remove the virtual brake/throttle hack that `telemetryStreamService.ts` uses today.
+
+**Context — what already exists vs. what's missing:**
+
+| | Today | Target |
+|---|---|---|
+| SSE endpoint `/events` | ✅ exists | ✅ keep |
+| CSV replay (`--mock`) | ✅ `SampleStream2024.csv` | ✅ keep |
+| CORS | ✅ `["*"]` | ✅ keep |
+| Emitted fields | GPS only (lat, lon, speed, heading) | + `gLat`, `gLong`, `throttle`, `brake`, `rpm`, `gear`, `steeringAngle` — all present in the CSV, currently stripped |
+| Replay timing | Fixed 10 Hz (`asyncio.sleep(0.1)`) | Driven by source timestamps so replays are reproducible |
+| Rate separation | Single 10 Hz stream | GPS/IMU at 25 Hz, OBD at 5–8 Hz (OBD fields hold last-known between updates) |
 
 **Acceptance criteria:**
-- Endpoint emits JSON frames containing at minimum: `time`, `lat`, `lon`, `speed`, `gLat`, `gLong`, `throttle`, `brake`, `rpm`, `gear`.
-- GPS/IMU fields update at ~25Hz; OBD fields update at 5–8Hz (frames carry the last-known OBD value between updates).
-- Throttling is driven by timestamps in the source dataset, not `sleep()`, so replays are reproducible.
-- Defaults to replaying `SampleStream2024.csv` (Sonoma); swappable via query param or env var.
-- CORS allows `localhost:5173` (koru-application dev server).
-- Documented in `streaming-telemetry-server/README.md` with a curl example.
+- `ingest.py` reads and emits every channel the CSV has (throttle %, brake, RPM, gear, gLat, gLong, steering) — not only GPS.
+- Replay speed is driven by `UTC time` / elapsed-time column from the CSV, not `sleep(0.1)`. Optional `--rate` flag for 1×/2×/0.5× speed.
+- Output emits GPS/IMU at ~25 Hz and OBD at 5–8 Hz (frames between OBD updates carry the last-known OBD value).
+- `koru-application/src/services/telemetryStreamService.ts` stops deriving virtual brake/throttle from G-forces once the server emits the real channels. Remove the `// Virtual brake/throttle from G-forces` block.
+- Updated `streaming-telemetry-server/README.md` with a curl example of the new frame shape.
+- Existing clients using only GPS fields keep working (backward compatible).
 
-**Dependencies:** None. Unblocks Data Reasoning integration tests and UX demos.
+**Dependencies:** None. Unblocks ET-5 (time sync against real OBD), the UX-1 CoachPanel demo (coaching metadata works with mocked stream), and removes a known workaround in the PWA.
 
 ---
 

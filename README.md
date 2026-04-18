@@ -77,10 +77,12 @@ See [`docs/data-reasoning.md`](docs/data-reasoning.md) for detailed feature docu
 **Latency budget:** 300-500ms from event to audio. "Feedback 800ms late is worse than silence."
 
 - [x] **Hardware stack documented** — RaceBox Mini 25Hz, OBDLink MX+ 5-8Hz, Pixel 10 pipeline
-- [ ] **Mocked data stream API** — Rabimba deploying throttled API endpoint simulating RaceBox+OBD merged stream for pipeline development
+- [ ] **Extend `streaming-telemetry-server` to emit merged RaceBox+OBD stream** — Server already exposes SSE + CSV replay + CORS. Needed: emit the OBD/IMU channels already present in `SampleStream2024.csv` (throttle, brake, RPM, gear, gLat, gLong, steering), drive replay off source timestamps instead of fixed 10Hz `sleep()`, and separate rates (25Hz GPS/IMU, 5-8Hz OBD). Unblocks removing the virtual brake/throttle hack in `telemetryStreamService.ts`.
 - [ ] **Pre-rendered MP3s for safety-critical actions** — Audio clips for BRAKE, OVERSTEER_RECOVERY, COMMIT per persona
 - [ ] **Dual BT test** — Validate BLE 5.2 (RaceBox) + BT Classic 3.0 (OBDLink) simultaneous on Pixel 10
 - [ ] **Steering angle channel** — OBD PID if available on the GR86; otherwise IMU-derived estimate
+- [ ] **Time sync and OBD upsampling** — Cross-correlation calibration (hard throttle blip → RPM spike vs longitudinal G spike) aligns RaceBox GPS epoch with the browser's monotonic clock (expected 20-80ms offset). Upsample OBD (5-8Hz) to RaceBox rate (25Hz): linear interp for continuous channels, zero-order hold for discrete.
+- [ ] **Resilient BT bridge (PWA survives backgrounding)** — Pick an implementation path (Web Bluetooth for RaceBox + tethered companion process for OBDLink BT Classic, OR tethered process for both). PWA-level keep-alive with `navigator.wakeLock` + service worker; automatic reconnect on disconnect. See user story ET-6 for acceptance criteria.
 
 ### AGY Pipeline
 
