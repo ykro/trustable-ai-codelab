@@ -137,7 +137,7 @@ Companion to the [Roadmap in the README](../README.md#roadmap). This document tr
 
 **Context:** The app is a PWA. Two viable implementation paths — pick one and document in `docs/edge-architecture.md` before implementing:
 - **Path 1 (PWA + Web Bluetooth)**: RaceBox connects from the browser via Web Bluetooth. Keep-alive uses `navigator.wakeLock.request('screen')`, a service worker for the app shell, and installed-PWA mode. Does **not** work for the OBDLink MX+ (BT Classic not supported) — OBD must go through Path 2 or via the OBDLink's USB interface.
-- **Path 2 (PWA + tethered companion process)**: a companion process (Python/Node) running on the Pixel (Termux or similar) or on a laptop tethered to the Pixel talks BT/USB and proxies frames to the PWA over SSE — extends the current `streaming-telemetry-server` pattern.
+- **Path 2 (PWA + tethered companion process)**: a companion process (Python/Node) running on a laptop tethered to the Pixel over local Wi-Fi or hotspot talks BT/USB and proxies frames to the PWA over SSE — extends the current `streaming-telemetry-server` pattern. Sidesteps browser-platform limitations entirely.
 
 **Acceptance criteria:**
 - Decision recorded: which path, with rationale and how each BT/USB device is reached.
