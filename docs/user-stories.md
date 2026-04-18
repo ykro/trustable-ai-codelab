@@ -75,17 +75,18 @@ Companion to the [Roadmap in the README](../README.md#roadmap). This document tr
 
 ### ET-4 — CAN-to-USB bridge for BMW E46 (Team 2)
 
-**As a** Team 2 driver in the BMW E46,
-**I want** vehicle data read directly over CAN via USB,
-**so that** I get higher-rate OBD data without the BT Classic multiplexing bottleneck.
+**As a** Team 2 driver in the BMW E46 M3 (MSS54HP),
+**I want** vehicle data read directly over CAN via USB (CANable 2.0 or equivalent),
+**so that** I get raw CAN frame rates without the BT Classic multiplexing bottleneck and without being limited by the 10.4 kbaud K-Line ceiling.
 
 **Acceptance criteria:**
-- USB CAN adapter identified and purchased (one candidate evaluated and documented).
-- Adapter emits frames in a format consumable by the same ingestion layer as OBDLink MX+ (adapter layer if needed).
-- OBD data rate measured: target ≥ 20Hz sustained.
+- USB CAN adapter selected (e.g., CANable 2.0) and purchased; decision logged in `docs/hardware-validation.md`.
+- Adapter emits frames behind the `VehicleDataStream` interface (see ET-8) so no coaching-engine code changes.
+- Frame rate measured: 100+ Hz sustained on the MSS54HP ECU CAN bus.
 - Pixel 10 recognizes the USB device; no root or custom kernel required.
+- Documented as Path B in the Edge architecture (Path A = OBDLink MX+ K-Line).
 
-**Dependencies:** Team 2 availability for testing. Lower priority than Team 1 GR86 for the May 23 field test.
+**Dependencies:** ET-8 (VehicleDataStream interface). Team 2 availability for testing. Lower priority than Team 1 GR86 for the May 23 field test.
 
 ---
 
@@ -103,6 +104,67 @@ Companion to the [Roadmap in the README](../README.md#roadmap). This document tr
 - Replay CSV format includes the column.
 
 **Dependencies:** ET-1 schema agreement. Does not block May 23 field test but unlocks post-session analysis.
+
+---
+
+### ET-6 — Time sync and OBD upsampling
+
+**As a** Data Reasoning engineer consuming a merged RaceBox + OBD frame,
+**I want** every frame to carry a single monotonic timestamp with GPS and OBD aligned to the same clock,
+**so that** I can correlate a throttle input with the G-force it produces without false offsets corrupting the driver model or decision matrix.
+
+**Acceptance criteria:**
+- Clock alignment: a cross-correlation calibration routine detects a synchronization event (e.g., hard throttle blip producing an RPM spike and a longitudinal G spike) and computes the offset between RaceBox GPS epoch and Android SystemClock.
+- Measured offset falls in the expected 20–80 ms range; calibration runs at session start and re-checks every N minutes (value documented).
+- OBD channels (5–8 Hz) are upsampled to the RaceBox rate (25 Hz) on the merged stream.
+- Continuous channels (throttle %, RPM) use linear interpolation; discrete channels (gear, brake boolean) use zero-order hold. Behavior documented per channel in `docs/session-schema.md`.
+- Interpolation does not introduce ghost spikes — verified by replaying a known session and comparing interpolated vs. raw channel curves.
+- Every emitted `TelemetryFrame` carries a `time` field in a single clock domain; raw per-source timestamps optionally preserved as `raceboxTime` / `obdTime` for debugging.
+
+**Dependencies:** ET-1 (merged stream exists); ET-3 (dual-BT stable enough to run calibration). Critical for coaching quality — without it the driver model sees causally-inverted events.
+
+---
+
+### ET-7 — Resilient BT bridge with high-priority BLE
+
+**As a** driver with my Pixel 10 mounted in the car,
+**I want** the telemetry BT streams to keep running even if the screen locks or I switch apps briefly,
+**so that** I do not lose a lap of coaching because the OS suspended a background connection.
+
+**Context:** The current app is a PWA, not a native Android app. Implementation strategy depends on where the BT stack lives:
+- **Path 1 (PWA + Web Bluetooth)**: BT talks from the browser via Web Bluetooth API; keep-alive via `screen.wakeLock`, service worker, and installed-PWA permissions.
+- **Path 2 (PWA + tethered server)**: a companion process on the Pixel 10 (or a laptop) talks BT and proxies frames to the PWA over SSE — current `streaming-telemetry-server` pattern extended for BT.
+- **Path 3 (Native Android)**: a foreground `Service` with persistent notification owns the BT stack. Only applies if/when FW-5 ships.
+
+Pick one and document it in `docs/edge-architecture.md` before implementing. The acceptance criteria are the same regardless of path.
+
+**Acceptance criteria:**
+- Decision recorded: which path (1, 2, or 3), with rationale.
+- Screen-lock stress test: 30 minutes of driving with screen locked, no user interaction — coaching continues, frame drops within the ET-3 baseline.
+- App backgrounding test: briefly switching to another app, then back — no reconnect required.
+- For the RaceBox Mini BLE 5.2 connection: the high-priority connection mode is requested immediately after `CONNECTED` (native Android: `requestConnectionPriority(CONNECTION_PRIORITY_HIGH)`; Web Bluetooth: document whichever equivalent is available, or state explicitly that the API does not expose this).
+- Measured BLE latency falls in the 7.5–15 ms band after the high-priority request (or the measured baseline is documented if the path cannot request it).
+- Reconnect logic: on unexpected disconnect, automatic reconnection within 5 seconds without user interaction.
+- Persistent visual indicator in the UI (PWA) or notification (native) shows connection status: connected / reconnecting / disconnected.
+
+**Dependencies:** ET-3 (dual-BT stability baseline). Path 3 depends on FW-5. Required for the May 23 field test in some form — decide and implement the path by then.
+
+---
+
+### ET-8 — `VehicleDataStream` interface (OBD ↔ CAN swap)
+
+**As an** Edge engineer upgrading Team 2 from OBD over BT to direct CAN over USB,
+**I want** a single `VehicleDataStream` abstraction that both sources implement,
+**so that** the coaching engine never needs to change when a team moves from Path A (OBDLink MX+ K-Line) to Path B (CANable 2.0 direct CAN).
+
+**Acceptance criteria:**
+- Interface defined with the callbacks the coaching engine needs: `onFrame(TelemetryFrame)`, `onStatusChange(status)`, `onError(err)`, plus a lifecycle of `connect()` / `disconnect()`.
+- Two implementations behind the interface: Path A (OBDLink MX+ over BT Classic / K-Line PIDs) and Path B (CANable 2.0 over USB / direct CAN decoding).
+- Swapping implementations requires zero changes in `coachingService` or anything downstream — verified by the existing Data Reasoning test suite continuing to pass with either implementation.
+- Each implementation documents the channels it provides and their achievable rates (maps to the Data Channel Tiers table in the README).
+- A mock implementation for tests (already implicitly exists via the mocked data stream in ET-1, but now conforms to the same interface).
+
+**Dependencies:** ET-1 for mock implementation; unblocks ET-4 (Path B).
 
 ---
 
