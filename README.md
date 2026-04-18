@@ -41,9 +41,9 @@ This system tells you in real time how to adapt and fix it, adjusted to your ski
 
 ### Edge / Telemetry
 
-- [ ] **Data fusion and time sync** — Implement cross-correlation calibration (hard throttle blip → RPM spike vs IMU G spike) to align RaceBox GPS epoch timestamps with Android SystemClock. Expected offset: 20-80ms. Upsample OBD channels (5-8Hz) to RaceBox rate (25Hz) via linear interpolation (continuous) and zero-order hold (discrete).
+- [ ] **Data fusion and time sync** — Implement cross-correlation calibration (hard throttle blip → RPM spike vs IMU G spike) to align RaceBox GPS epoch timestamps with the browser's monotonic clock (`performance.now()` / the clock used to stamp OBD frames arriving at the PWA). Expected offset: 20-80ms. Upsample OBD channels (5-8Hz) to RaceBox rate (25Hz) via linear interpolation (continuous) and zero-order hold (discrete).
 - [ ] **Pre-rendered MP3s for safety-critical actions** — Record or source audio clips for BRAKE, OVERSTEER_RECOVERY, COMMIT per coach persona. The audioService already supports AudioContext pre-caching; this needs the actual MP3 files and integration to bypass TTS latency for time-critical calls.
-- [ ] **Bluetooth telemetry bridge** — RaceBox Mini connects via BLE 5.2 (7.5-15ms latency at high priority). OBDLink MX+ connects via Bluetooth Classic 3.0. Both streams must run in an Android foreground Service with persistent notification. Call `requestConnectionPriority(CONNECTION_PRIORITY_HIGH)` on RaceBox immediately after connecting.
+- [ ] **Bluetooth telemetry bridge** — RaceBox Mini (BLE 5.2, 7.5-15ms latency at high priority) reaches the PWA via Web Bluetooth; OBDLink MX+ (Bluetooth Classic 3.0) is **not** reachable from the browser and requires either a tethered companion process (extending `streaming-telemetry-server`) or its USB interface via WebUSB. Keep-alive under screen lock uses `navigator.wakeLock.request('screen')` plus service worker registration — not native OS service primitives. See [user story ET-7](https://github.com/ykro/trustable-ai-codelab/blob/main/docs/user-stories.md#et-7--resilient-bt-bridge-that-survives-backgrounding) on `main` for the two implementation paths.
 - [ ] **VehicleDataStream interface** — Abstract the OBD source behind a common interface so the coaching engine never changes when upgrading from OBD to CAN bus. Path A (OBDLink MX+ K-Line) and Path B (CANable 2.0 direct CAN) both implement the same callbacks.
 - [ ] **Mocked data stream API** — Rabimba to deploy a throttled API endpoint providing synthetic telemetry streams. Enables pipeline development before the field test. All teams should validate their ingestion against this endpoint.
 - [ ] **CAN-to-USB ingestion (Team 2)** — Team 2 BMW E46 will have direct CAN-to-USB access (decision: Apr 14). Plan software strategy for hardwired CAN ingestion at 100+ Hz, bypassing Bluetooth multiplexing.
@@ -107,7 +107,7 @@ Total budget from telemetry event to audio coaching: **300-500ms**.
 ```
 RaceBox BLE → Pixel 10:     7.5 - 15 ms
 OBD K-Line round-trip:      80 - 150 ms (vehicle-side, cannot reduce)
-Android BLE → fusion:       5 - 10 ms
+Browser BLE → fusion:       5 - 10 ms
 AI inference (hot path):    < 50 ms
 TTS audio output:           50 - 200 ms
                             ─────────────
