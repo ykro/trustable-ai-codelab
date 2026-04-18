@@ -29,6 +29,8 @@ This system tells you in real time how to adapt and fix it, adjusted to your ski
 
 ## Roadmap
 
+> Cross-team TODOs below have testable user-story versions with acceptance criteria in [`docs/user-stories.md`](docs/user-stories.md).
+
 ### Data Reasoning
 
 > **Focus: BEGINNER drivers** (Team 1 Beginner Pod). All coaching logic, humanization, and thresholds are tuned for beginner skill level first. The same codebase supports intermediate/advanced via the Driver Model, but the primary target is someone on track for the first time.
