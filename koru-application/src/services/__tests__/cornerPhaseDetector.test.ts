@@ -95,4 +95,53 @@ describe('CornerPhaseDetector', () => {
       expect(result.cornerId).toBeNull();
     });
   });
+
+  describe('GPS phase classification coverage (regression: each phase must be reachable)', () => {
+    // Entry at (0,0), apex 55m north at (0.0005, 0). 0.0001 deg lat ≈ 11.13m.
+    const track: Track = {
+      name: 'Synthetic',
+      length: 1000,
+      sectors: [{ id: 1, name: 'S1', startDist: 0, endDist: 1000 }],
+      corners: [
+        {
+          id: 42,
+          name: 'Synth',
+          entryDist: 100, apexDist: 200, exitDist: 300,
+          entryLat: 0, entryLon: 0,
+          lat: 0.0005, lon: 0,
+          advice: '',
+        },
+      ],
+      mapPoints: [{ x: 0, y: 0 }],
+      recordLap: 60,
+      center: { lat: 0, lng: 0 },
+    };
+
+    beforeEach(() => detector.setTrack(track));
+
+    it('detects APEX at the apex point', () => {
+      // Right on apex → distToApex ≈ 0.
+      expect(detector.detect(makeFrame({ latitude: 0.0005, longitude: 0 })).phase).toBe('APEX');
+    });
+
+    it('detects MID_CORNER between entry and apex', () => {
+      // Midway: distToEntry ≈ 27.8m, distToApex ≈ 27.8m → both <30 and <60.
+      expect(detector.detect(makeFrame({ latitude: 0.00025, longitude: 0 })).phase).toBe('MID_CORNER');
+    });
+
+    it('detects TURN_IN near entry but far from apex', () => {
+      // Just before entry (opposite side from apex): distToEntry ≈ 33m, distToApex ≈ 88m.
+      expect(detector.detect(makeFrame({ latitude: -0.0003, longitude: 0 })).phase).toBe('TURN_IN');
+    });
+
+    it('detects EXIT past the apex', () => {
+      // Just past apex: distToApex ≈ 22m (>15, <100), distToEntry ≈ 77m.
+      expect(detector.detect(makeFrame({ latitude: 0.0007, longitude: 0 })).phase).toBe('EXIT');
+    });
+
+    it('detects BRAKE_ZONE well before entry', () => {
+      // Approach: distToEntry ≈ 89m, distToApex ≈ 145m. Within detection window via distToEntry<200.
+      expect(detector.detect(makeFrame({ latitude: -0.0008, longitude: 0 })).phase).toBe('BRAKE_ZONE');
+    });
+  });
 });

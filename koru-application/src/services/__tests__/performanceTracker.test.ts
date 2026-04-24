@@ -131,6 +131,17 @@ describe('PerformanceTracker', () => {
     expect(tracker.getCornerTrend(1)).toBeNull(); // need 2+ snapshots
   });
 
+  it('stores the cornerName on both the snapshot and history (regression)', () => {
+    tracker.update(createFrame(80, 60, 10), 'BRAKE_ZONE', 7, 'Turn 7');
+    tracker.update(createFrame(50, 0, 80), 'APEX', 7, 'Turn 7');
+    tracker.update(createFrame(65, 0, 100), 'EXIT', 7, 'Turn 7');
+    tracker.update(createFrame(70, 0, 100), 'STRAIGHT', null, null);
+
+    const history = tracker.getCornerHistories().get(7)!;
+    expect(history.cornerName).toBe('Turn 7');
+    expect(history.snapshots[0].cornerName).toBe('Turn 7');
+  });
+
   it('should return correct trend with multiple laps', () => {
     // Lap 1: exit 60
     tracker.update(createFrame(80, 60, 10), 'BRAKE_ZONE', 1, 'Turn 1');

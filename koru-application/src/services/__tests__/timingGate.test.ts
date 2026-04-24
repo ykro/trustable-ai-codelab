@@ -55,4 +55,45 @@ describe('TimingGate', () => {
     gate.update('STRAIGHT');
     expect(gate.getState()).toBe('OPEN');
   });
+
+  it('should resume COOLDOWN (not OPEN) after a BLACKOUT interrupts cooldown', () => {
+    // Start delivery at t=1000
+    gate.startDelivery();
+    // Finish delivery → COOLDOWN at t=3000 (default deliveryMs=2000)
+    vi.setSystemTime(3000);
+    gate.update('STRAIGHT');
+    expect(gate.getState()).toBe('COOLDOWN');
+
+    // Driver enters apex at t=3500 — still inside cooldown (ends at 4500).
+    vi.setSystemTime(3500);
+    gate.update('APEX');
+    expect(gate.getState()).toBe('BLACKOUT');
+
+    // Exits apex at t=3800 — cooldown hasn't elapsed yet, must NOT snap to OPEN.
+    vi.setSystemTime(3800);
+    gate.update('STRAIGHT');
+    expect(gate.getState()).toBe('COOLDOWN');
+    expect(gate.canDeliver(3)).toBe(false);
+
+    // Once real cooldown window elapses (t=4500+), gate reopens.
+    vi.setSystemTime(4500);
+    gate.update('STRAIGHT');
+    expect(gate.getState()).toBe('OPEN');
+    expect(gate.canDeliver(3)).toBe(true);
+  });
+
+  it('should restore to OPEN after BLACKOUT interrupts OPEN', () => {
+    expect(gate.getState()).toBe('OPEN');
+    gate.update('MID_CORNER');
+    expect(gate.getState()).toBe('BLACKOUT');
+    gate.update('STRAIGHT');
+    expect(gate.getState()).toBe('OPEN');
+  });
+
+  it('P0 safety messages bypass BLACKOUT and COOLDOWN', () => {
+    gate.update('APEX');
+    expect(gate.getState()).toBe('BLACKOUT');
+    expect(gate.canDeliver(0)).toBe(true);
+    expect(gate.canDeliver(1)).toBe(false);
+  });
 });
