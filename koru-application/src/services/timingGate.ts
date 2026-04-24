@@ -29,6 +29,9 @@ export class TimingGate {
   private config: TimingGateConfig;
   private inBlackoutPhase = false;
   private blackoutSet: Set<CornerPhase>;
+  // Remembers the state BLACKOUT interrupted so we can resume COOLDOWN
+  // instead of snapping to OPEN (which would let a new message fire with zero cooldown).
+  private preBlackoutState: Exclude<TimingState, 'BLACKOUT'> = 'OPEN';
 
   constructor(config?: Partial<TimingGateConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -54,20 +57,27 @@ export class TimingGate {
     const now = Date.now();
 
     if (this.inBlackoutPhase) {
-      // Enter blackout regardless of current state (unless delivering)
-      if (this.state !== 'DELIVERING') {
+      // Enter blackout regardless of current state (unless delivering).
+      // Snapshot the pre-blackout state so we can restore it on exit —
+      // DELIVERING is protected above, so only OPEN/COOLDOWN can be captured.
+      if (this.state !== 'DELIVERING' && this.state !== 'BLACKOUT') {
+        this.preBlackoutState = this.state;
         this.state = 'BLACKOUT';
       }
     } else if (this.state === 'BLACKOUT') {
-      // Exiting blackout phase — go to OPEN
-      this.state = 'OPEN';
-    } else if (this.state === 'DELIVERING') {
-      // Check if delivery duration has elapsed
+      // Exiting blackout — restore the interrupted state.
+      // If COOLDOWN was active, its end condition (deliveryMs + cooldownMs
+      // elapsed since lastDeliveryTime) is still checked on the next tick.
+      this.state = this.preBlackoutState;
+    }
+
+    // Delivery/cooldown transitions — evaluated independently so they still
+    // progress on the same frame we restore from BLACKOUT.
+    if (this.state === 'DELIVERING') {
       if (now - this.lastDeliveryTime >= this.config.deliveryMs) {
         this.state = 'COOLDOWN';
       }
     } else if (this.state === 'COOLDOWN') {
-      // Check if cooldown has elapsed
       if (now - this.lastDeliveryTime >= this.config.deliveryMs + this.config.cooldownMs) {
         this.state = 'OPEN';
       }

@@ -69,19 +69,17 @@ export class CornerPhaseDetector {
     distToApex: number,
     _corner: Corner,
   ): CornerPhase {
-    // Approaching entry — brake zone
-    if (distToEntry < 100 && distToApex > 80) return 'BRAKE_ZONE';
-    // Close to entry — turn-in
-    if (distToEntry < 50 && distToApex > 40) return 'TURN_IN';
-    // Near apex
-    if (distToApex < 30) return 'APEX';
-    // Between entry and apex
-    if (distToEntry < 30 && distToApex < 80) return 'MID_CORNER';
-    // Past apex, moving away
-    if (distToApex < 100 && distToApex > 30) return 'EXIT';
-    // Far approach
-    if (distToEntry < 200 && distToApex > 100) return 'BRAKE_ZONE';
-
+    // Ordered most-specific → least-specific so inner phases (APEX, MID_CORNER,
+    // TURN_IN) aren't swallowed by outer ranges. Previous ordering left TURN_IN
+    // and MID_CORNER unreachable, which disabled GPS-driven blackout.
+    if (distToApex < 15) return 'APEX';
+    if (distToEntry < 30 && distToApex < 60) return 'MID_CORNER';
+    if (distToEntry < 60 && distToApex > 40) return 'TURN_IN';
+    if (distToEntry < 150 && distToApex > 80) return 'BRAKE_ZONE';
+    // EXIT requires being past turn-in (distToEntry ≥ 60) so a far approach
+    // with apex 80–99m away can't be misclassified as exiting.
+    if (distToApex > 15 && distToApex < 100 && distToEntry >= 60) return 'EXIT';
+    if (distToEntry < 200) return 'BRAKE_ZONE';
     return 'STRAIGHT';
   }
 

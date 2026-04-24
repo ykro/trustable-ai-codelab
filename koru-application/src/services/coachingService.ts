@@ -56,8 +56,12 @@ export class CoachingService {
   private lastCognitiveCheck = 0;
   private lastHustleCheck = 0;
 
-  // Session goals (Phase 6.2 — populated by pre-race chat or auto-generated)
+  // Session goals (Phase 6.2 — populated by pre-race chat or auto-generated).
+  // Actions that appear in any active goal's prioritizedActions get promoted
+  // one priority tier (e.g. P2 → P1, P3 → P2) so the driver's focus areas
+  // surface faster. Rebuilt on every setSessionGoals call.
   private sessionGoals: SessionGoal[] = [];
+  private prioritizedActionSet: Set<CoachAction> = new Set();
 
   // Session progression
   private sessionPhase: 1 | 2 | 3 = 1;
@@ -90,14 +94,22 @@ export class CoachingService {
    * Called before session starts — either from pre-race chat UI (Rabimba/UX)
    * or auto-generated from driver profile + track knowledge.
    *
-   * Goals bias the hot path: prioritizedActions in goals get boosted.
+   * Goals bias the hot path: actions listed in any goal's prioritizedActions
+   * get a one-tier priority boost at enqueue time (P3→P2, P2→P1). P0 stays P0.
    * Max 3 goals per session (Ross Bentley: "1-3 specific physical changes").
-   *
-   * TODO: UX team (Rabimba) builds pre-race chat that calls this method.
-   * TODO: Auto-generation from DriverProfile when persistence layer is ready (AGY Pipeline).
    */
   setSessionGoals(goals: SessionGoal[]): void {
     this.sessionGoals = goals.slice(0, 3);
+    this.prioritizedActionSet = new Set(
+      this.sessionGoals.flatMap(g => g.prioritizedActions ?? []),
+    );
+  }
+
+  /** One-tier boost for actions the driver is actively working on. P0 is unchanged. */
+  private boostForGoals(action: CoachAction, base: 0 | 1 | 2 | 3): 0 | 1 | 2 | 3 {
+    if (base === 0) return 0;
+    if (!this.prioritizedActionSet.has(action)) return base;
+    return (base - 1) as 0 | 1 | 2 | 3;
   }
 
   onCoaching(cb: CoachingCallback) {
@@ -106,9 +118,11 @@ export class CoachingService {
   }
 
   private emit(msg: CoachingDecision) {
-    // TODO: Remove when CoachPanel displays priority/action/phase metadata
-    const pri = ['🔴P0', '🟠P1', '🔵P2', '⚪P3'][msg.priority] ?? `P${msg.priority}`;
-    console.log(`[COACH] ${pri} ${msg.action ?? msg.path} | ${msg.cornerPhase} | ${msg.text}`);
+    // DEBUG log gated behind Vite env flag — strip the string interpolation cost in prod/field use.
+    if (import.meta.env.DEV && import.meta.env.VITE_COACH_DEBUG === 'true') {
+      const pri = ['P0', 'P1', 'P2', 'P3'][msg.priority] ?? `P${msg.priority}`;
+      console.log(`[COACH] ${pri} ${msg.action ?? msg.path} | ${msg.cornerPhase} | ${msg.text}`);
+    }
     this.timingGate.startDelivery();
     this.listeners.forEach(cb => cb(msg));
   }
@@ -158,8 +172,9 @@ export class CoachingService {
   private adaptToSkillLevel(): void {
     const level = this.driverModel.getSkillLevel();
     if (level === this.lastSkillLevel) return;
-    // TODO: Remove when CoachPanel displays driver state metadata
-    console.log(`[DRIVER] Skill level changed: ${this.lastSkillLevel} → ${level}`);
+    if (import.meta.env.DEV && import.meta.env.VITE_COACH_DEBUG === 'true') {
+      console.log(`[DRIVER] Skill level changed: ${this.lastSkillLevel} -> ${level}`);
+    }
     this.lastSkillLevel = level;
 
     switch (level) {
@@ -199,25 +214,20 @@ export class CoachingService {
   // ── HOT PATH: instant heuristic commands ───────────────
 
   private runHotPath(frame: TelemetryFrame) {
-    const data = {
-      brake: frame.brake,
-      throttle: frame.throttle,
-      gLat: frame.gLat,
-      gLong: frame.gLong,
-      speed: frame.speed,
-    };
-
+    // TelemetryFrame is a structural superset of DecisionRule.check's parameter,
+    // so we pass it directly — no intermediate object allocation at 25Hz.
     for (const rule of DECISION_MATRIX) {
-      if (rule.check(data)) {
-        // Skip neutral actions
-        if (rule.action === 'STABILIZE' || rule.action === 'MAINTAIN') return;
+      if (rule.check(frame)) {
+        // Skip neutral actions — continue scanning so a higher-priority rule
+        // later in the matrix (e.g., a P0 safety rule) can still fire this frame.
+        if (rule.action === 'STABILIZE' || rule.action === 'MAINTAIN') continue;
         // Session progression: suppress advanced actions in early phases
         const suppressed = CoachingService.PHASE_SUPPRESSED[this.sessionPhase];
         if (suppressed?.has(rule.action)) continue;
         // Skip repeats
         if (rule.action === this.lastHotAction) continue;
 
-        const priority = actionPriority(rule.action);
+        const priority = this.boostForGoals(rule.action, actionPriority(rule.action));
         this.lastHotAction = rule.action;
 
         const decision: CoachingDecision = {
@@ -252,7 +262,7 @@ export class CoachingService {
         path: 'hot',
         action: 'COGNITIVE_OVERLOAD',
         text: this.humanizeAction('COGNITIVE_OVERLOAD', frame),
-        priority: 2,
+        priority: this.boostForGoals('COGNITIVE_OVERLOAD', 2),
         cornerPhase: this.currentPhase,
         timestamp: Date.now(),
       });
@@ -281,7 +291,7 @@ export class CoachingService {
         path: 'hot',
         action: 'HUSTLE',
         text: this.humanizeAction('HUSTLE', frame),
-        priority: 3,
+        priority: this.boostForGoals('HUSTLE', 3),
         cornerPhase: this.currentPhase,
         timestamp: Date.now(),
       });
@@ -539,6 +549,9 @@ export class CoachingService {
     if (now - this.lastColdTime < this.coldCooldownMs) return;
     if (!this.apiKey) return;
 
+    // Set before await to prevent hammering a slow endpoint while one call is in flight.
+    // On fetch failure we reset to 0 below so offline → back-online recovers quickly
+    // instead of silently burning a 15–20s window per failure.
     this.lastColdTime = now;
     const coach = this.getCoach();
 
@@ -581,7 +594,11 @@ ${instruction}`;
           body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
         }
       );
-      if (!res.ok) return;
+      if (!res.ok) {
+        // Don't penalize the driver for a one-off 5xx — retry on the next frame.
+        this.lastColdTime = 0;
+        return;
+      }
       const data = await res.json();
       const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
       if (text) this.coachingQueue.enqueue({
@@ -592,6 +609,8 @@ ${instruction}`;
         timestamp: Date.now(),
       });
     } catch (err) {
+      // Network failure (common offline at the track) — retry on the next frame.
+      this.lastColdTime = 0;
       console.error('Cold path failed:', err);
     }
   }
@@ -607,7 +626,7 @@ ${instruction}`;
       this.lastCorner = nearest;
       this.coachingQueue.enqueue({
         path: 'feedforward',
-        text: `📍 ${nearest.name}: ${nearest.advice}`,
+        text: `${nearest.name}: ${nearest.advice}`,
         priority: 1,
         cornerPhase: this.currentPhase,
         timestamp: Date.now(),

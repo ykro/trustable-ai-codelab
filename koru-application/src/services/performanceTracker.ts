@@ -33,6 +33,7 @@ export class PerformanceTracker {
   private cornerHistories = new Map<number, CornerHistory>();
   private currentLap = 1;
   private currentCornerId: number | null = null;
+  private currentCornerName = '';
 
   // Accumulating metrics for current corner pass
   private currentMinSpeed = Infinity;
@@ -62,6 +63,7 @@ export class PerformanceTracker {
     if (cornerId !== null && cornerId !== this.currentCornerId) {
       this.flushCorner();
       this.currentCornerId = cornerId;
+      this.currentCornerName = cornerName ?? '';
       this.currentMinSpeed = frame.speed;
       this.currentMaxBrake = frame.brake;
       this.currentMaxThrottle = frame.throttle;
@@ -95,7 +97,7 @@ export class PerformanceTracker {
 
     const snapshot: CornerSnapshot = {
       cornerId: this.currentCornerId,
-      cornerName: '',
+      cornerName: this.currentCornerName,
       lapNumber: this.currentLap,
       minSpeed: this.currentMinSpeed,
       maxBrake: this.currentMaxBrake,
@@ -106,7 +108,11 @@ export class PerformanceTracker {
 
     let history = this.cornerHistories.get(this.currentCornerId);
     if (!history) {
-      history = { cornerId: this.currentCornerId, cornerName: '', snapshots: [] };
+      history = {
+        cornerId: this.currentCornerId,
+        cornerName: this.currentCornerName,
+        snapshots: [],
+      };
       this.cornerHistories.set(this.currentCornerId, history);
     }
 
@@ -142,6 +148,7 @@ export class PerformanceTracker {
   private resetCurrent(): void {
     this.inCorner = false;
     this.currentCornerId = null;
+    this.currentCornerName = '';
     this.currentMinSpeed = Infinity;
     this.currentMaxBrake = 0;
     this.currentMaxThrottle = 0;

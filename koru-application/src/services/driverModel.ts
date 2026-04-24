@@ -57,9 +57,15 @@ export class DriverModel {
     if (this.throttleDeltas.length >= MIN_SAMPLES) {
       const classified = this.classify();
       if (classified === this.candidateLevel) {
-        // Check if enough time has passed
-        if (time - this.candidateStartTime >= HYSTERESIS_DURATION_S) {
+        // Promote only once per window. Without the guard on currentLevel,
+        // a candidate that matches currentLevel would leave candidateStartTime
+        // un-reset, allowing an instant re-promotion on the next oscillation.
+        if (
+          this.currentLevel !== this.candidateLevel &&
+          time - this.candidateStartTime >= HYSTERESIS_DURATION_S
+        ) {
           this.currentLevel = this.candidateLevel;
+          this.candidateStartTime = time;
         }
       } else {
         this.candidateLevel = classified;
