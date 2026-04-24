@@ -37,7 +37,19 @@ This system tells you in real time how to adapt and fix it, adjusted to your ski
 - [x] **Priority queue** — P0 (safety: BRAKE, OVERSTEER_RECOVERY) preempts all. P1 tactical, P2 strategic, P3 encouragement. Max 5 items, 3s stale expiry.
 - [x] **Driver model** — Classifies skill from input smoothness + coasting ratio. Time-based 10s rolling window (robust to 8Hz-25Hz data rates). 5s hysteresis before level change. Adapts cooldown, blackout, and cold path prompts per skill level.
 - [x] **Coaching knowledge enrichment** — Ross Bentley mental models (friction circle, weight transfer, trail braking, vision, maintenance throttle). 4 new coaching rules (EARLY_THROTTLE, LIFT_MID_CORNER, SPIKE_BRAKE, COGNITIVE_OVERLOAD). Skill-adapted humanization (beginner: feel-based, advanced: data-driven). Session progression (phases 1-3 suppress advanced techniques early). Skill-aware cold path prompts.
-- [x] **Test infrastructure** — Vitest with 42 tests: unit tests for geoUtils, CornerPhaseDetector, TimingGate, CoachingQueue, DriverModel, DecisionMatrix. Sonoma CSV integration test with synthetic fixture.
+- [x] **Test infrastructure** — Vitest with 60 tests across 9 files: unit tests for geoUtils, CornerPhaseDetector, TimingGate, CoachingQueue, DriverModel, DecisionMatrix, PerformanceTracker, plus Phase 6 integration. Sonoma CSV integration test with synthetic fixture.
+- [x] **Session intelligence (Phase 6 partial)** — `SessionGoal` type + `setSessionGoals()` API, `DriverProfile` / `DriverProfileStore` interfaces, and in-session `PerformanceTracker` for lap-over-lap corner metrics and encouragement.
+
+#### Phase 6 — remaining work
+
+- [ ] **Message compression pipeline** — Paragraph → sentence → trigger phrase. Shortens cold-path output progressively so a beginner hears a trigger phrase instead of a paragraph when cognitive load is high. *Owned by data-reasoning, no external blockers — next task to land in this branch.*
+- [ ] **Pre-race goal chat integration** — Wire `setSessionGoals()` into a pre-race conversational UI so the driver picks 1–3 focus areas before the session.
+  - *Needs from UX (Rabimba):* A pre-race chat screen that collects 1–3 goals, serializes them to the `SessionGoal[]` shape defined in `docs/pre-race-chat-contract.md`, and calls `coachingService.setSessionGoals(goals)` before the live session starts. The contract doc lists the exact type, allowed `prioritizedActions` values, and a sample payload.
+  - *Needs from data-reasoning (this branch, after UX lands):* wire `prioritizedActions` into hot-path P2 boosting, and emit P3 encouragement when the associated `PerformanceTracker` metric improves.
+- [ ] **DriverProfile persistence backend** — Replace the in-memory `DriverProfileStore` with a persistent backend for cross-session learning (skill-level drift, recurring mistakes, goal completion history).
+  - *Needs from AGY Pipeline (Mike):* (a) define the storage schema (BigQuery table or local-JSON-plus-sync) covering `DriverProfile` fields (skill level history, weak corners by track, goal completion counts, last-session timestamp), (b) expose read/write endpoints or a client SDK that satisfies the `DriverProfileStore` interface in `types.ts`, and (c) a write hook at session end to flush `PerformanceTracker.getCornerHistories()` into the profile. Tracked as user stories AGY-1 and AGY-2 on `main`.
+  - *Needs from data-reasoning (this branch, after AGY lands):* swap the in-memory stub for the real store, add a session-boundary flush call, and add regression tests against a fake store.
+- [ ] **Auto-generation of session goals from DriverProfile** — Once persistence lands, derive default goals from the driver's recent weak corners/mistakes instead of asking from scratch. *Depends on the two items above — no net new cross-team asks beyond them.*
 
 ### Edge / Telemetry
 
@@ -161,6 +173,16 @@ The coaching engine routes decisions through three paths based on urgency:
             Corner-specific advice delivered before the maneuver.
             "T3 right: late apex, brake at the 100m board."
 ```
+
+### How Data Reasoning Works Alongside Gemini
+
+Data reasoning is designed to partner with Gemini end-to-end. Gemini is the language and voice of the coach — generating nuanced cold-path analysis, shaping prompts into natural coaching lines, and speaking them via TTS. Data reasoning is the judgment layer that sits beside Gemini and makes it race-safe: it decides which telemetry events are worth reasoning about, hands Gemini a skill-adapted prompt with the right physics and pedagogy context, and governs when any output — Gemini's or heuristic — is actually delivered. The two are co-designed:
+
+- **Feeding Gemini (input enrichment)** — The HOT path filters raw telemetry through a decision matrix so only meaningful events reach the coaching layer. The DriverModel classifies the driver (BEG/INT/ADV) and rewrites the cold-path prompt accordingly: beginners get feel-based, trigger-phrase prompts; advanced drivers get data-driven, technical prompts. Ross Bentley mental models and session-phase context are injected into the prompt so Gemini reasons with physics + pedagogy, not just numbers.
+- **Pairing with Gemini (output gating)** — The TimingGate state machine (OPEN → DELIVERING → COOLDOWN → BLACKOUT) decides *when* any output is actually spoken. The priority queue replaces stale Gemini responses with fresher P0/P1 safety calls rather than queueing a 2-second-old paragraph behind a "BRAKE!".
+- **Complementing Gemini (hot path for safety)** — For sub-50ms safety calls (BRAKE, OVERSTEER_RECOVERY), heuristic rules fire directly alongside Gemini's slower cold-path work; a 2–5s round trip is unacceptable on those. Gemini continues to own cold-path multi-frame analysis and feedforward corner enrichment on its own cadence.
+
+Put another way: **Gemini is the voice; data reasoning is the judgment about what's worth saying, to whom, and when.** They work as a single coach — "800ms late is worse than silence," so the layer exists to make sure Gemini arrives at the driver's ear at the right moment with the right message.
 
 ### Coach Personas
 

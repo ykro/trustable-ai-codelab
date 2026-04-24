@@ -77,7 +77,7 @@ Priority queue for coaching messages:
 | P0 | Safety | BRAKE, OVERSTEER_RECOVERY |
 | P1 | Tactical | TRAIL_BRAKE, THROTTLE, EARLY_THROTTLE, LIFT_MID_CORNER, SPIKE_BRAKE |
 | P2 | Strategic | Gemini cold path analysis, COGNITIVE_OVERLOAD |
-| P3 | Encouragement | PUSH, FULL_THROTTLE, DONT_BE_A_WUSS |
+| P3 | Encouragement | PUSH, FULL_THROTTLE, HUSTLE, HESITATION |
 
 - Max 5 items, sorted by priority then timestamp
 - Messages expire after 3 seconds (stale)
