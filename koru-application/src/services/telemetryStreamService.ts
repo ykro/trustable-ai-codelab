@@ -182,13 +182,8 @@ export class TelemetryStreamService {
     gLat = Math.max(-3, Math.min(3, gLat));
     gLong = Math.max(-3, Math.min(3, gLong));
 
-    // Virtual brake/throttle from G-forces (only when telemetry device has no dedicated sensors)
     let brake = point.brake ?? 0;
     let throttle = point.throttle ?? 0;
-    if (point.brake === undefined && point.throttle === undefined) {
-      brake = gLong < -0.3 ? Math.min(100, Math.abs(gLong) * 100) : 0;
-      throttle = gLong > 0.15 ? Math.min(100, gLong * 150) : 0;
-    }
     // 🔬 EXERCISE (swap brake/throttle — works for ALL data sources): uncomment below
     // [brake, throttle] = [throttle, brake];
 

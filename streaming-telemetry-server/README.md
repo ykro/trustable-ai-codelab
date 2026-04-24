@@ -18,7 +18,7 @@ If you are interested in reading GPS telemetry from an actual car's GPS receiver
 2. Create a virtual environment: `python3 -m venv venv`
 3. Activate it: `source venv/bin/activate` (on Windows: `venv\Scripts\activate`)
 4. Install dependencies: `pip install -r requirements.txt`
-5. Run the server (mock): `python ingest.py --mock`
+5. Run the server (mock): `python ingest.py --mock` (or `python ingest.py --mock --rate 1.0` to run at realtime speed)
 
 ### Connecting to live GPS (VK-162)
 
@@ -51,6 +51,18 @@ HOST=0.0.0.0
 
 The service exposes SSE at:
 
-`http://localhost:8000/stream` (defaults)
+`http://localhost:8000/events` (defaults)
+
+**Testing The Stream**
+
+To test the output format of the stream, you can run the following `curl` command:
+```bash
+curl -N http://localhost:8000/events
+```
+
+A typical payload emitted by the SSE stream in mock mode looks like this:
+```json
+data: {"class": "TPV", "device": "/dev/mock", "mode": 3, "time": "2026-04-20T12:00:00.000000+00:00", "lat": 38.1605196, "lon": -122.453801, "alt": 0, "speed": 4.722, "track": 26.7, "climb": 0, "epx": 0.5, "epy": 0.5, "epv": 1.0, "gLat": 0.0, "gLong": 0.0, "throttle": 14.0, "brake": 0.0, "rpm": 2508.0, "gear": 3, "steering": 14.0}
+```
 
 Point any frontend or client at this URL. If your app uses a build-time API base URL (e.g. Vite’s `VITE_API_URL`), set it to match the host and port (e.g. `http://localhost:8000`).
