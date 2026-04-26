@@ -34,7 +34,11 @@ function getStr(row: Record<string, string>, ...keys: string[]): string {
 }
 
 export function parseTelemetryCSV(csvText: string): TelemetryFrame[] {
-  const result = Papa.parse<Record<string, string>>(csvText, {
+  // Strip comment lines (TrackAddict/RaceRender CSVs start with # comments)
+  const lines = csvText.split('\n');
+  const cleaned = lines.filter(l => !l.startsWith('#')).join('\n');
+
+  const result = Papa.parse<Record<string, string>>(cleaned, {
     header: true,
     skipEmptyLines: true,
     dynamicTyping: false,
@@ -61,14 +65,14 @@ export function parseTelemetryCSV(csvText: string): TelemetryFrame[] {
       time: getVal(row, 'Time', 'Elapsed time (s)', 'time', 'Time (s)'),
       latitude,
       longitude,
-      altitude: getVal(row, 'Height (m)', 'Altitude', 'alt', 'GPS_Alt') || undefined,
-      speed: getVal(row, 'Speed (km/h)', 'Speed', 'speed', 'GPS_Speed'),
-      rpm: getVal(row, 'Engine Speed (rpm)', 'RPM', 'rpm') || undefined,
-      throttle: getVal(row, 'Throttle Position (%)', 'Throttle', 'throttle'),
-      brake: getVal(row, 'Brake Pressure (bar)', 'Brake', 'brake'),
+      altitude: getVal(row, 'Altitude (m)', 'Height (m)', 'Altitude', 'alt', 'GPS_Alt') || undefined,
+      speed: getVal(row, 'Speed (MPH)', 'Speed (km/h)', 'Speed', 'speed', 'GPS_Speed'),
+      rpm: getVal(row, 'Engine Speed (RPM) *OBD', 'Engine Speed (rpm)', 'RPM', 'rpm') || undefined,
+      throttle: getVal(row, 'Throttle Position (%) *OBD', 'Throttle Position (%)', 'Throttle', 'throttle'),
+      brake: getVal(row, 'Brake (calculated)', 'Brake Pressure (bar)', 'Brake', 'brake'),
       steering: getVal(row, 'Steering Angle (Degrees)', 'Steering', 'steering') || undefined,
-      gLat: getVal(row, 'Lateral acceleration (g)', 'G_Lat', 'gLat'),
-      gLong: getVal(row, 'Longitudinal acceleration (g)', 'G_Long', 'gLong'),
+      gLat: getVal(row, 'Accel X', 'Lateral acceleration (g)', 'G_Lat', 'gLat'),
+      gLong: getVal(row, 'Accel Y', 'Longitudinal acceleration (g)', 'G_Long', 'gLong'),
       gear: getVal(row, 'Gear', 'gear') || undefined,
     });
   }
