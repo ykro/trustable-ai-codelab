@@ -31,41 +31,76 @@ This system tells you in real time how to adapt and fix it, adjusted to your ski
 
 ## Roadmap
 
+> Cross-team TODOs below have testable user-story versions with acceptance criteria in [`docs/user-stories.md`](docs/user-stories.md).
+
 ### Data Reasoning
 
-- [x] **Timing state machine** — OPEN → DELIVERING → COOLDOWN → BLACKOUT. Enforces silence during mid-corner/apex. P0 safety messages bypass all states. Configurable per skill level.
-- [x] **Priority queue** — P0 (safety: BRAKE, OVERSTEER_RECOVERY) preempts all. P1 tactical, P2 strategic, P3 encouragement. Max 5 items, 3s stale expiry.
-- [x] **Driver model** — Classifies skill from input smoothness + coasting ratio. Time-based 10s rolling window (robust to 8Hz-25Hz data rates). 5s hysteresis before level change. Adapts cooldown, blackout, and cold path prompts per skill level.
-- [x] **Coaching knowledge enrichment** — Ross Bentley mental models (friction circle, weight transfer, trail braking, vision, maintenance throttle). 4 new coaching rules (EARLY_THROTTLE, LIFT_MID_CORNER, SPIKE_BRAKE, COGNITIVE_OVERLOAD). Skill-adapted humanization (beginner: feel-based, advanced: data-driven). Session progression (phases 1-3 suppress advanced techniques early). Skill-aware cold path prompts.
-- [x] **Test infrastructure** — Vitest with 60 tests across 9 files: unit tests for geoUtils, CornerPhaseDetector, TimingGate, CoachingQueue, DriverModel, DecisionMatrix, PerformanceTracker, plus Phase 6 integration. Sonoma CSV integration test with synthetic fixture.
-- [x] **Session intelligence (Phase 6 partial)** — `SessionGoal` type + `setSessionGoals()` API, `DriverProfile` / `DriverProfileStore` interfaces, and in-session `PerformanceTracker` for lap-over-lap corner metrics and encouragement.
+> **Focus: BEGINNER drivers** (Team 1 Beginner Pod). All coaching logic, humanization, and thresholds are tuned for beginner skill level first. The same codebase supports intermediate/advanced via the Driver Model, but the primary target is someone on track for the first time.
 
-#### Phase 6 — remaining work
+See [`docs/data-reasoning.md`](docs/data-reasoning.md) for detailed feature documentation and how to run tests.
 
-- [ ] **Message compression pipeline** — Paragraph → sentence → trigger phrase. Shortens cold-path output progressively so a beginner hears a trigger phrase instead of a paragraph when cognitive load is high. *Owned by data-reasoning, no external blockers — next task to land in this branch.*
-- [ ] **Pre-race goal chat integration** — Wire `setSessionGoals()` into a pre-race conversational UI so the driver picks 1–3 focus areas before the session.
-  - *Needs from UX (Rabimba):* A pre-race chat screen that collects 1–3 goals, serializes them to the `SessionGoal[]` shape defined in `docs/pre-race-chat-contract.md`, and calls `coachingService.setSessionGoals(goals)` before the live session starts. The contract doc lists the exact type, allowed `prioritizedActions` values, and a sample payload.
-  - *Needs from data-reasoning (this branch, after UX lands):* wire `prioritizedActions` into hot-path P2 boosting, and emit P3 encouragement when the associated `PerformanceTracker` metric improves.
-- [ ] **DriverProfile persistence backend** — Replace the in-memory `DriverProfileStore` with a persistent backend for cross-session learning (skill-level drift, recurring mistakes, goal completion history).
-  - *Needs from AGY Pipeline (Mike):* (a) define the storage schema (BigQuery table or local-JSON-plus-sync) covering `DriverProfile` fields (skill level history, weak corners by track, goal completion counts, last-session timestamp), (b) expose read/write endpoints or a client SDK that satisfies the `DriverProfileStore` interface in `types.ts`, and (c) a write hook at session end to flush `PerformanceTracker.getCornerHistories()` into the profile. Tracked as user stories AGY-1 and AGY-2 on `main`.
-  - *Needs from data-reasoning (this branch, after AGY lands):* swap the in-memory stub for the real store, add a session-boundary flush call, and add regression tests against a fake store.
-- [ ] **Auto-generation of session goals from DriverProfile** — Once persistence lands, derive default goals from the driver's recent weak corners/mistakes instead of asking from scratch. *Depends on the two items above — no net new cross-team asks beyond them.*
+**Phase 0-3: Foundation + Core Engine** (implemented on `data-reasoning` branch)
+- [x] **Timing state machine** — OPEN → DELIVERING → COOLDOWN → BLACKOUT. P0 safety bypasses blackout. Blackout during MID_CORNER + APEX for beginners. Restores COOLDOWN cleanly when BLACKOUT interrupts it.
+- [x] **Priority queue** — P0 safety, P1 tactical, P2 strategic, P3 encouragement. Max 5 items, 3s stale expiry, preempt for safety.
+- [x] **Driver model** — Skill classification from smoothness + coasting ratio. Time-based 10s window (handles 8Hz OBD + 25Hz RaceBox). 5s hysteresis with re-promotion guard.
+- [x] **Corner phase detection** — GPS primary (APEX/MID_CORNER/TURN_IN/EXIT/BRAKE_ZONE all reachable, ordering verified by tests) + G-force fallback (track-agnostic). Equirectangular pre-filter for performance.
+- [x] **Foundation types** — CornerPhase, TimingState, CoachingDecision, DriverState, OVERSTEER_RECOVERY, telemetry parser fix for Sonoma CSV.
+
+**Phase 4: Test Infrastructure** (implemented)
+- [x] **78 tests across 9 files** — geoUtils, CornerPhaseDetector, TimingGate, CoachingQueue, DriverModel, DecisionMatrix, PerformanceTracker, CoachingService Phase 6, Sonoma CSV integration. Includes regression tests for the cooldown-during-blackout fix, GPS phase reachability, hysteresis, and session-goal priority boost.
+- [x] **Vitest setup** — `npm test` runs all tests.
+
+**Phase 5: Coaching Knowledge Enrichment** (implemented)
+- [x] Ross Bentley mental models (7) + T-Rod coaching patterns (5) in racing physics knowledge
+- [x] 4 new decision matrix rules: EARLY_THROTTLE, LIFT_MID_CORNER, SPIKE_BRAKE, COGNITIVE_OVERLOAD
+- [x] Skill-adapted humanization (beginner: feel-based T-Rod + Ross Bentley trigger phrases, advanced: data-driven)
+- [x] Session progression (time-based phases, suppress advanced actions for beginners)
+- [x] Cold path prompts adapted per skill level
+- [x] Ross Bentley trigger phrases: "Hard initial!", "Eyes up!", "Hustle!", "Squeeze don't stab"
+- [x] Hustle/laziness detection — detects lazy throttle on exits for beginners (Ross Bentley insight)
+
+**Phase 6: Session Intelligence** (in progress)
+- [ ] **6.1 Message Compression** — paragraph → sentence → trigger phrase progression. First time: full instruction. Repeated: trigger phrase only. Per action+corner tracking within session. (Ross Bentley: trigger phrases are the goal state). *Owned by data-reasoning, no external blockers — next task to land in this branch.*
+- [x] **6.2 Pre-Session Goal Setting** — `SessionGoal` type + `setSessionGoals()` API. `prioritizedActions` now actually bias the hot path: a listed action gets a one-tier priority boost (P3→P2, P2→P1; P0 stays P0).
+  - *Needs from UX (Rabimba):* A pre-race chat screen that collects 1–3 goals, serializes them to the `SessionGoal[]` shape in [`docs/pre-race-chat-contract.md`](docs/pre-race-chat-contract.md), and calls `coachingService.setSessionGoals(goals)` before the live session starts.
+  - *Needs from data-reasoning (after UX lands):* emit P3 encouragement when the associated `PerformanceTracker` metric improves.
+- [x] **6.3 Cross-Session Driver Profile** — `DriverProfile` + `DriverProfileStore` interfaces defined. Tracks skill level, problem corners, strengths/weaknesses across sessions.
+  - *Needs from AGY Pipeline (Mike):* (a) define the storage schema covering `DriverProfile` fields (skill level history, weak corners by track, goal completion counts), (b) expose endpoints / a client SDK that satisfies the `DriverProfileStore` interface in `types.ts`, and (c) a write hook at session end to flush `PerformanceTracker.getCornerHistories()` into the profile. Tracked as AGY-1 / AGY-2 in `docs/user-stories.md`.
+  - *Needs from data-reasoning (after AGY lands):* swap the in-memory stub for the real store, add a session-boundary flush call, add regression tests against a fake store.
+- [x] **6.4 In-Session Improvement Tracking** — `PerformanceTracker` tracks per-corner metrics (min speed, brake point, throttle %, corner name) within a session. Lap-over-lap delta emits P3 encouragement on improvement. Cross-session trends require persistence layer (Phase 6.3).
+- [ ] **Auto-generation of session goals from DriverProfile** — Once persistence lands, derive default goals from the driver's recent weak corners/mistakes instead of asking from scratch. *Depends on 6.2 + 6.3 above — no net new cross-team asks.*
 
 ### Edge / Telemetry
 
-- [ ] **Data fusion and time sync** — Implement cross-correlation calibration (hard throttle blip → RPM spike vs IMU G spike) to align RaceBox GPS epoch timestamps with the browser's monotonic clock (`performance.now()` / the clock used to stamp OBD frames arriving at the PWA). Expected offset: 20-80ms. Upsample OBD channels (5-8Hz) to RaceBox rate (25Hz) via linear interpolation (continuous) and zero-order hold (discrete).
-- [ ] **Pre-rendered MP3s for safety-critical actions** — Record or source audio clips for BRAKE, OVERSTEER_RECOVERY, COMMIT per coach persona. The audioService already supports AudioContext pre-caching; this needs the actual MP3 files and integration to bypass TTS latency for time-critical calls.
-- [ ] **Bluetooth telemetry bridge** — RaceBox Mini (BLE 5.2, 7.5-15ms latency at high priority) reaches the PWA via Web Bluetooth; OBDLink MX+ (Bluetooth Classic 3.0) is **not** reachable from the browser and requires either a tethered companion process (extending `streaming-telemetry-server`) or its USB interface via WebUSB. Keep-alive under screen lock uses `navigator.wakeLock.request('screen')` plus service worker registration — not native OS service primitives. See [user story ET-6](https://github.com/ykro/trustable-ai-codelab/blob/main/docs/user-stories.md#et-6--resilient-bt-bridge-that-survives-backgrounding) on `main` for the two implementation paths.
-- [ ] **Mocked data stream API** — Rabimba to deploy a throttled API endpoint providing synthetic telemetry streams. Enables pipeline development before the field test.
-- [ ] **Dual Bluetooth stability test** — Test simultaneous streaming from RaceBox Mini (BLE 5.2) and OBD sensors (BT Classic 3.0) to verify connection stability and stack multiplexing on Pixel 10.
+**Hardware stack** (confirmed Apr 14 mentorship with Brian Luc):
+| Device | Rate | Interface | Data |
+|--------|------|-----------|------|
+| RaceBox Mini | 25Hz GPS + IMU | BLE 5.2 | lat, lon, speed, gLat, gLong, altitude |
+| OBDLink MX+ | 5-8Hz OBD-II | BT Classic 3.0 | throttle, brake, RPM, gear, coolant |
+| Pixel 10 | — | USB-C / BT | Runs coaching app, Gemini Nano on-device |
+
+**Team car:** 2024 Subaru GR86 (automatic, DauntlessOBD CAN) — Team 1 Beginner Pod.
+
+**Latency budget:** 300-500ms from event to audio. "Feedback 800ms late is worse than silence."
+
+- [x] **Hardware stack documented** — RaceBox Mini 25Hz, OBDLink MX+ 5-8Hz, Pixel 10 pipeline
+- [ ] **Extend `streaming-telemetry-server` to emit merged RaceBox+OBD stream** — Server already exposes SSE + CSV replay + CORS. Needed: emit the OBD/IMU channels already present in `SampleStream2024.csv` (throttle, brake, RPM, gear, gLat, gLong, steering), drive replay off source timestamps instead of fixed 10Hz `sleep()`, and separate rates (25Hz GPS/IMU, 5-8Hz OBD). Unblocks removing the virtual brake/throttle hack in `telemetryStreamService.ts`.
+- [ ] **Pre-rendered MP3s for safety-critical actions** — Audio clips for BRAKE, OVERSTEER_RECOVERY, COMMIT per persona
+- [ ] **Dual BT test** — Validate BLE 5.2 (RaceBox) + BT Classic 3.0 (OBDLink) simultaneous on Pixel 10
+- [ ] **Steering angle channel** — OBD PID if available on the GR86; otherwise IMU-derived estimate
+- [ ] **Time sync and OBD upsampling** — Cross-correlation calibration (hard throttle blip → RPM spike vs longitudinal G spike) aligns RaceBox GPS epoch with the browser's monotonic clock (expected 20-80ms offset). Upsample OBD (5-8Hz) to RaceBox rate (25Hz): linear interp for continuous channels, zero-order hold for discrete.
+- [ ] **Resilient BT bridge (PWA survives backgrounding)** — Pick an implementation path (Web Bluetooth for RaceBox + tethered companion process for OBDLink BT Classic, OR tethered process for both). PWA-level keep-alive with `navigator.wakeLock` + service worker; automatic reconnect on disconnect. See user story ET-6 for acceptance criteria.
 
 ### AGY Pipeline
 
 - [ ] **Define post-session data schema** — Specify what format coaching events and lap metrics should be stored in (BigQuery, local JSON, or other) so the coaching engine can export session data for analysis and cross-session learning.
 - [ ] **Build ingestion for coaching events** — Receive per-corner metrics (brake point, apex speed, exit speed), mistake zones, and coaching decisions from each session. Enable post-session analysis and improvement tracking.
+- [ ] **Persistence layer for cross-session driver profile** — Implement `DriverProfileStore` interface (defined by Data Reasoning in `src/types.ts`). Storage backend (IndexedDB, localStorage, or cloud sync) that persists `DriverProfile` across sessions. Data Reasoning defines what to store; AGY Pipeline provides the how. See `DriverProfileStore` interface: `load()`, `save()`, `addSession()`.
 
 ### UX / Frontend
 
+- [ ] **Update CoachPanel to show coaching metadata** — CoachPanel currently shows only `path` and `text`. Update to display priority badge (P0-P3), action name, and corner phase from `CoachingDecision`. This makes the Data Reasoning layer visible in the UI.
+- [ ] **Pre-race chat UI** — Build a pre-session goal-setting interface (form or conversational). Output: array of `SessionGoal` objects passed to `coachingService.setSessionGoals()`. See integration contract: `docs/pre-race-chat-contract.md`. Max 3 goals, beginner-focused.
 - [ ] **Convert to PWA** — Add service worker and manifest for offline support. The hot path and feedforward already run client-side; PWA ensures the UI loads without network at the track.
 - [ ] **Minimal HUD for track use** — Design a signal-light-only visual (green/yellow/red) for in-car use. The driver cannot look at a screen; audio is primary, but a peripheral color signal adds confirmation without distraction.
 - [ ] **Coach persona selection UX** — Evaluate whether mid-session coach switching is useful or distracting. Consider recommending a persona based on driver skill level from the driver model.
@@ -165,7 +200,7 @@ The coaching engine routes decisions through three paths based on urgency:
        │    "Trail brake!" "Commit!" "Brake!"
        │    No cloud round-trip. Fires on threshold violations.
        │
-       ├──► COLD PATH (Gemini Flash, 2-5s)
+       ├──► COLD PATH (Gemini 2.5 Flash Lite, 2-5s)
        │    Multi-frame telemetry analysis with physics context.
        │    "You're lifting early in T5 — trust the grip through mid-corner."
        │
@@ -205,6 +240,8 @@ Five AI personas with different communication styles. Switch mid-session.
 - Node.js 20+
 - Python 3.10+
 - A [Gemini API key](https://aistudio.google.com/apikey) (optional, hot path works without it)
+
+> **Note:** The original lab used `gemini-2.0-flash` which is now deprecated ([deprecation schedule](https://ai.google.dev/gemini-api/docs/deprecations)). Updated to `gemini-2.5-flash-lite` for cold path and analysis.
 
 ### 1. Start the Telemetry Server
 

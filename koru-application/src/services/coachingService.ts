@@ -584,6 +584,7 @@ ${instruction}`;
 
     try {
       const res = await fetch(
+        // API key passed via x-goog-api-key header (review fix) — never in URL.
         'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent',
         {
           method: 'POST',
