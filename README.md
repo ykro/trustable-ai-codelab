@@ -11,6 +11,7 @@ This system tells you in real time how to adapt and fix it, adjusted to your ski
 
 ## Table of Contents
 
+- [April 29 Technical Gate — Data Reasoning Checkpoint](#april-29-technical-gate--data-reasoning-checkpoint)
 - [Roadmap](#roadmap)
   - [Data Reasoning](#data-reasoning)
   - [Edge / Telemetry](#edge--telemetry)
@@ -26,6 +27,81 @@ This system tells you in real time how to adapt and fix it, adjusted to your ski
 - [koru-application](#koru-application)
 - [Tech Stack](#tech-stack)
 - [Data Reasoning Documentation](docs/data-reasoning.md)
+
+---
+
+## April 29 Technical Gate — Data Reasoning Checkpoint
+
+This section is the entry point for the architecture + code review on **April 29, 2026**. It summarizes what data reasoning has shipped, how it sits in the larger system, and what reviewers should evaluate.
+
+### What has shipped (Phases 0–5 complete, Phase 6 partial)
+
+All work lives in [`koru-application/src/services`](koru-application/src/services) and [`koru-application/src/utils`](koru-application/src/utils). Detailed module-by-module documentation in [`docs/data-reasoning.md`](docs/data-reasoning.md).
+
+| Phase | Status | What's in it |
+|-------|--------|--------------|
+| 0 — Foundation | ✅ | Types (`CornerPhase`, `TimingState`, `CoachingDecision`, `DriverState`), shared `geoUtils`, telemetry parser fix for Sonoma CSV, `OVERSTEER_RECOVERY` safety rule. |
+| 1 — Detection + timing | ✅ | `CornerPhaseDetector` (GPS primary with equirectangular pre-filter + G-force fallback). `TimingGate` state machine with pre-blackout state restoration. |
+| 2 — Priority queue | ✅ | `CoachingQueue` with P0–P3 priorities, 3s stale expiry, P0 preempt, max 5 items. |
+| 3 — Driver model | ✅ | `DriverModel` classifies BEGINNER / INTERMEDIATE / ADVANCED from input smoothness + coasting ratio. Time-based 10s window, 5s hysteresis with re-promotion guard. |
+| 4 — Test infrastructure | ✅ | Vitest, **81 tests across 9 files**, Sonoma CSV integration. Covers cooldown-during-blackout, GPS phase reachability, hysteresis, P0 floor. |
+| 5 — Coaching knowledge | ✅ | Ross Bentley mental models + T-Rod patterns in physics knowledge. 4 new decision rules. Skill-adapted humanization. Session progression. Hustle detection. |
+| 6 — Session intelligence | 🟡 partial | `SessionGoal` + `setSessionGoals()` with working `prioritizedActions` boost (floored at P1). `DriverProfile` / `DriverProfileStore` interfaces. In-session `PerformanceTracker`. **Pending:** message compression (owned), pre-race chat UI (UX), persistence backend (AGY). |
+
+### Architecture in one diagram
+
+The system is an 8-layer split, with data reasoning owning layers 2–6. Edge / Telemetry feeds layer 1, AGY Pipeline persists layer 8, UX renders layer 7.
+
+```
+                     ┌─────────────────────────────────────────────────┐
+                     │        koru-application (PWA, Pixel 10)         │
+                     │                                                 │
+ ┌──────────────┐SSE │  ┌─────────────┐    ┌──────────────────────┐    │
+ │ RaceBox 25Hz │───►│  │ Telemetry   │───►│   CoachingService     │   │
+ │ + OBDLink    │    │  │ Stream      │    │   ─────────────────   │   │
+ │ + CSV replay │    │  └─────────────┘    │ DriverModel ─┐        │   │
+ └──────────────┘    │                     │ CornerPhase ─┤        │   │
+                     │                     │ TimingGate  ─┼─► HOT  │   │
+                     │                     │ Queue       ─┤  COLD ─┼──►│ Gemini Flash
+                     │                     │ Performance ─┤  FEED ─┤   │
+                     │                     │ SessionGoals ┘        │   │
+                     │                     └────────┬─────────────┘    │
+                     │                              ▼                  │
+                     │                  Audio (TTS + AudioContext)     │
+                     └─────────────────────────────────────────────────┘
+
+   Latency budget: <50ms HOT, 2–5s COLD, 150m geofence FEED.  "800ms late > silence."
+```
+
+**Decision routing:** every frame fans out to three paths. HOT runs heuristics + driver-adapted humanization in-process; COLD prompts Gemini with a skill-adapted prompt and physics context; FEEDFORWARD fires from a 150m geofence around known corners. All three enqueue into a single priority queue, and the TimingGate decides whether the dequeue actually speaks.
+
+**Data reasoning enriches Gemini, not replaces it:** see the [Architecture → How Data Reasoning Works Alongside Gemini](#how-data-reasoning-works-alongside-gemini) section below for the full framing.
+
+### What reviewers should evaluate on April 29
+
+The hard technical gate is two days out. The following are the concrete aspects we want pressure-tested:
+
+1. **Latency budget under load.** HOT path is <50ms by design — does it hold at sustained 25 Hz on a Pixel 10 PWA with Gemini cold-path requests in flight, audio playing, and a screen lock active? Per-frame allocations were removed; verify there are no others (e.g. inside `humanizeAction` string templating, `CoachingQueue.enqueue` Map ops).
+2. **Safety bypass surface area.** P0 (`OVERSTEER_RECOVERY`, future `BRAKE`) is the only path that legitimately bypasses the TimingGate. After PR #3, `boostForGoals` is floored at P1, so no goal-promoted action can reach P0. Walk through the TimingGate state machine (`OPEN → DELIVERING → COOLDOWN → BLACKOUT`) and confirm there is no other sneak path — especially the COOLDOWN-interrupted-by-BLACKOUT restoration logic ([`timingGate.ts`](koru-application/src/services/timingGate.ts)).
+3. **Driver model accuracy and stability.** Smoothness + coasting are coarse signals; the 5 s hysteresis + re-promotion guard is what keeps the system from oscillating. Does the classifier behave reasonably on real Sonoma data, and do the BEGINNER/INTERMEDIATE/ADVANCED thresholds still hold for non-GR86 drivers?
+4. **Offline behavior.** Cold path resets `lastColdTime = 0` on fetch failure so the next frame can retry. HOT + FEEDFORWARD must work fully offline. Is the offline contract spelled out clearly enough for the field test (May 23 Sonoma)?
+5. **Coaching content quality.** Are the Ross Bentley + T-Rod-derived phrases actually what a beginner driver should hear? `humanizeAction` covers 5 personas × 20+ actions × 3 skill levels — content sprawl risk. Suggest spot-checking the BEGINNER set against the T-Rod transcript.
+6. **Cross-team interface contracts.** Phase 6.2 needs UX (Rabimba) — see [`docs/pre-race-chat-contract.md`](docs/pre-race-chat-contract.md). Phase 6.3 needs AGY Pipeline (Mike) — `DriverProfileStore` interface in [`types.ts`](koru-application/src/types.ts). These are the integration cliffs; reviewers should verify the contracts are sufficient for downstream pods to start work.
+7. **Test coverage gaps.** 81 tests, with regression coverage on every blocker fix. Gaps known: no end-to-end latency benchmark; no soak test for queue under burst input; no test for cold-path retry recovery (only the reset is unit-tested). Worth flagging if these are gating concerns for the May 23 field test.
+
+### Comparison vs. Garmin Catalyst (the SOTA we're trying to beat)
+
+|  | Garmin Catalyst | This project |
+|---|---|---|
+| Coaching model | Pure heuristic, fixed rules | Heuristic (HOT) + Gemini (COLD) + geofence (FEED) |
+| Driver adaptation | None | Driver model classifies skill, adjusts cooldown / blackout / prompts |
+| Timing | Always talks (even mid-corner) | TimingGate with blackout during apex / mid-corner |
+| Track knowledge | Delta vs best lap (numbers) | Corner-specific advice, real-coach phrasing, physics |
+| Personalization | One voice, one style | 5 personas × 3 skill levels |
+| Hustle detection | No | Lazy-throttle detection on exits (Ross Bentley insight) |
+| Session goals | No | 1–3 focus areas bias hot-path priority |
+| Improvement tracking | Lap times only | Per-corner deltas, lap-over-lap encouragement |
+| Offline | Yes | Yes (HOT + FEEDFORWARD; COLD optional) |
 
 ---
 
