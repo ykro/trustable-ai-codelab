@@ -257,6 +257,74 @@ The CSV fixture uses TrackAddict column format (`Speed (MPH)`, `Accel X`, `Accel
 
 ---
 
+## Domain Expertise Layer (provenance)
+
+Coaching judgment is not heuristics-with-numbers. Every threshold, decision rule, persona phrase, and goal-vocabulary item in the data-reasoning code traces back to a specific source — an authored curriculum, a recorded coaching session, a mentorship conversation. We treat the body of domain knowledge as a **first-class architectural layer** that feeds the runtime layers, with attribution preserved end-to-end. The README has the executive summary; this section is the full provenance map.
+
+### Sources
+
+- **Ross Bentley — _Speed Secrets_** (44-page curriculum, read in full). Mental models corpus, trigger phrases, inside-out coaching style, "1–3 specific physical changes per session" rule.
+- **Ross Bentley mentorship — Apr 15, 2026** (recorded session + notes). Hustle-zones insight, fear/cognitive-overload signal, BEGINNER prompt style.
+- **T-Rod coaching session at Sonoma** (3,291-word transcript of real beginner coaching). Feel-based BEGINNER phrasing, four T-Rod-specific decision rules, "pick a pedal" and "ski slope vs cliff" idioms.
+- **Brian Luc mentorship — Apr 14, 2026** (hardware + edge mentorship). Hardware-tier framing, latency-budget framing ("800ms late > silence"), informed degraded-mode design.
+- **Garmin Catalyst** (SOTA reference; Ross Bentley was a consultant). Defines what we choose NOT to do — numbers-only, post-hoc, no driver adaptation, talks mid-corner.
+
+### Where the layer lives in code
+
+Three artifacts:
+
+- [`koru-application/src/utils/coachingKnowledge.ts`](../koru-application/src/utils/coachingKnowledge.ts)
+  - `RACING_PHYSICS_KNOWLEDGE` — Ross Bentley mental-model corpus (~1 KB). Injected verbatim into every cold-path Gemini prompt so the model reasons with physics + pedagogy, not just numbers.
+  - `DECISION_MATRIX` — 12 rules, each `(action, condition string, telemetry predicate)`. The `condition` string is human-readable, written in coaching language; the predicate is the threshold-form of the same idea.
+- [`koru-application/src/data/trodCoachingData.ts`](../koru-application/src/data/trodCoachingData.ts) — patterns extracted from the T-Rod transcript. Source for the 4 T-Rod decision rules and BEGINNER phrasing.
+- [`koru-application/src/services/coachingService.ts` → `humanizeAction`](../koru-application/src/services/coachingService.ts) — ~250 lines of skill-adapted phrasing across 5 personas × 3 skill levels × ~20 actions. The BEGINNER row is sourced from Ross Bentley trigger phrases + the T-Rod transcript verbatim where applicable.
+
+### Provenance map
+
+| Code artifact | Source | Quote / reference |
+|---|---|---|
+| `RACING_PHYSICS_KNOWLEDGE` → "Friction Circle (Clock Metaphor)" | Ross Bentley curriculum | "12 o'clock is max braking, 6 is max acceleration, 3 and 9 are max cornering. The fastest drivers trace the edge of the circle." |
+| `RACING_PHYSICS_KNOWLEDGE` → "Weight Transfer (Seesaw Metaphor)" | Ross Bentley curriculum | "The car is a seesaw. Brake = nose dips, fronts grip more. Throttle = nose rises, rears grip more." |
+| `RACING_PHYSICS_KNOWLEDGE` → "Maintenance Throttle" | Ross Bentley curriculum | A small amount of throttle through the corner stabilizes the car; lifting unloads the rear. |
+| `RACING_PHYSICS_KNOWLEDGE` → "Trail Braking" | Ross Bentley curriculum | Continue light braking past turn-in to keep weight on the front tires for grip. |
+| `RACING_PHYSICS_KNOWLEDGE` → "Vision (Eyes Up)" | Ross Bentley curriculum | "Look further ahead than you think you need to." |
+| `DECISION_MATRIX` → `OVERSTEER_RECOVERY` (`\|gLat\|>0.7 && gLong<-0.3 && throttle<5 && speed>40`) | Ross Bentley curriculum | Loss of rear grip during decel; safety-critical, P0. |
+| `DECISION_MATRIX` → `THRESHOLD` (`brake>50 && gLong<-0.8`) | Ross Bentley curriculum | Threshold braking — maximum decel without lockup. |
+| `DECISION_MATRIX` → `TRAIL_BRAKE` (`brake>10 && \|gLat\|>0.4`) | Ross Bentley curriculum | Light brake while cornering — proper trail braking. |
+| `DECISION_MATRIX` → `EARLY_THROTTLE` (`throttle>30 && \|gLat\|>0.6 && gLong<-0.1`) | T-Rod transcript | Repeated correction: "Wait for the exit before getting on the gas." |
+| `DECISION_MATRIX` → `LIFT_MID_CORNER` (`throttle<5 && \|gLat\|>0.4 && speed>50`) | T-Rod transcript | Sudden lift unloads the rear — destabilizes mid-corner. |
+| `DECISION_MATRIX` → `SPIKE_BRAKE` (`brake>70 && gLong<-1.2`) | T-Rod transcript | "The brake trace should be a ski slope, not a cliff. Squeeze, don't stab." |
+| `DECISION_MATRIX` → `COGNITIVE_OVERLOAD` (driver-model gated; `inputSmoothness < 0.3`) | Ross Bentley mentorship Apr 15 | Fear and cognitive load are leading indicators a beginner is past their limit; signal: input-smoothness collapse. |
+| `DECISION_MATRIX` → `COAST` (`throttle<10 && brake<10 && speed>60`) | T-Rod transcript | "Pick a pedal — gas or brake. Stay committed." |
+| `DECISION_MATRIX` → `HESITATION` | Ross Bentley mentorship Apr 15 | Beginner hesitation pattern: heavy brake at low speed, or lifting too early at high speed with no lateral G. |
+| `checkHustle()` (`throttle 50–92% on exit, BEGINNER only`) | Ross Bentley mentorship Apr 15 | Hustle zones — drivers get lazy mid-session; that last 10–15% throttle matters for exit speed onto straights. |
+| `humanizeAction(BEGINNER, COMMIT)` → "Commit! Full throttle now — the car can take it." | Ross Bentley trigger phrases | Inside-out coaching: short, action-first, no jargon. |
+| `humanizeAction(BEGINNER, EARLY_THROTTLE)` → "Wait for it... wait... NOW! Full throttle." | T-Rod transcript verbatim | Recorded coaching command from the Sonoma session. |
+| `humanizeAction(BEGINNER, COAST)` → "Pick a pedal — gas or brake. Stay committed!" | T-Rod transcript verbatim | Direct coaching command. |
+| `humanizeAction(BEGINNER, SPIKE_BRAKE)` → "Smoother on the brakes — squeeze, don't stab." | T-Rod transcript verbatim | "Squeeze, don't stab." |
+| `humanizeAction(BEGINNER, BRAKE)` → "Brake! Hard initial!" / "Start braking — squeeze it." | Ross Bentley trigger phrases | "Hard initial!" — Ross Bentley's preferred shorthand for threshold braking. |
+| `humanizeAction(BEGINNER, PUSH)` → "Eyes up! Look further ahead." | Ross Bentley trigger phrases | Vision rule made into a trigger phrase. |
+| `humanizeAction(BEGINNER, HUSTLE)` → "Hustle! Squirt the throttle — full send!" | Ross Bentley mentorship Apr 15 | Anti-laziness reminder for exits. |
+| `SessionGoal` (max 3 per session) | Ross Bentley mentorship Apr 15 | "1–3 specific physical changes per session." |
+| `SessionGoal.focus` enum (`braking`, `throttle`, `vision`, `lines`, `smoothness`) | Ross Bentley curriculum | The 5 fundamental skill categories. |
+| BEGINNER timing config: 3 s cooldown, blackout in `MID_CORNER + APEX` | Ross Bentley pedagogy | Beginners process slower; never coach mid-apex (the cognitive load is already saturated). |
+| Session phase progression (1 → 2 → 3 by elapsed time) | Ross Bentley mentorship Apr 15 | Don't burden a cold driver with advanced techniques in the first laps. |
+| Persona system (Tony / Rachel / AJ / Garmin / Super AJ) | Original codelab + Ross Bentley | Different drivers respond to different communication styles; the persona is configurable. |
+
+### Honesty notes
+
+- Not every line in `humanizeAction` for INTERMEDIATE / ADVANCED skill levels has a direct citation. Many are derived by analogy from the BEGINNER row plus persona style. This is acknowledged: BEGINNER is the focus pod for May 23, and the BEGINNER content is the part with the strongest provenance.
+- The `RACING_PHYSICS_KNOWLEDGE` corpus is paraphrased from the Ross Bentley curriculum, not a verbatim quote. The mental models and metaphors are his; the specific wording is condensed for prompt-injection efficiency.
+- The T-Rod transcript itself is held privately (mentorship material). The 5 patterns extracted in `trodCoachingData.ts` and the verbatim phrases listed above are the public distillation.
+
+### How the layer is kept honest
+
+- **Adding a new decision rule or coaching phrase requires a source citation in the commit message.** Reviewers can `git blame` any line to find the source.
+- **The `DECISION_MATRIX` `condition` string is human-readable** — it states the coaching idea in plain English next to the code predicate, so the two cannot drift silently.
+- **Test fixtures use real Sonoma CSV data** (`src/__tests__/fixtures/sonoma-excerpt.csv`) so phrasing decisions are verified against telemetry the source coaches were actually responding to.
+
+---
+
 ## Telemetry Capability Matrix (Degraded Modes)
 
 The data-reasoning layer is built to degrade gracefully when telemetry channels go missing. Field-test reality: BT Classic from the OBDLink MX+ may not reach the PWA in time for May 23 (see `Edge / Telemetry` TODOs on `main`). This table documents what coaching capability exists in each mode.

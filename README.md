@@ -12,6 +12,7 @@ This system tells you in real time how to adapt and fix it, adjusted to your ski
 ## Table of Contents
 
 - [April 29 Technical Gate — Data Reasoning Checkpoint](#april-29-technical-gate--data-reasoning-checkpoint)
+  - [Domain Expertise Layer](#domain-expertise-layer)
 - [Roadmap](#roadmap)
   - [Data Reasoning](#data-reasoning)
   - [Edge / Telemetry](#edge--telemetry)
@@ -44,8 +45,8 @@ All work lives in [`koru-application/src/services`](koru-application/src/service
 | 1 — Detection + timing | ✅ | `CornerPhaseDetector` (GPS primary with equirectangular pre-filter + G-force fallback). `TimingGate` state machine with pre-blackout state restoration. |
 | 2 — Priority queue | ✅ | `CoachingQueue` with P0–P3 priorities, 3s stale expiry, P0 preempt, max 5 items. |
 | 3 — Driver model | ✅ | `DriverModel` classifies BEGINNER / INTERMEDIATE / ADVANCED from input smoothness + coasting ratio. Time-based 10s window, 5s hysteresis with re-promotion guard. |
-| 4 — Test infrastructure | ✅ | Vitest, **81 tests across 9 files**, Sonoma CSV integration. Covers cooldown-during-blackout, GPS phase reachability, hysteresis, P0 floor. |
-| 5 — Coaching knowledge | ✅ | Ross Bentley mental models + T-Rod patterns in physics knowledge. 4 new decision rules. Skill-adapted humanization. Session progression. Hustle detection. |
+| 4 — Test infrastructure | ✅ | Vitest, **85 tests across 10 files**, Sonoma CSV integration + HOT-path latency benchmark. Covers cooldown-during-blackout, GPS phase reachability, hysteresis, P0 floor, P0 re-entry, nearest-corner regression. |
+| 5 — Domain expertise (coaching knowledge) | ✅ | See [Domain Expertise Layer](#domain-expertise-layer) below. Ross Bentley curriculum + T-Rod transcript + mentorship insights flow into decision rules, cold-path prompts, persona phrasing, hustle detection, and session-goal vocabulary. |
 | 6 — Session intelligence | 🟡 partial | `SessionGoal` + `setSessionGoals()` with working `prioritizedActions` boost (floored at P1). `DriverProfile` / `DriverProfileStore` interfaces. In-session `PerformanceTracker`. **Pending:** message compression (owned), pre-race chat UI (UX), persistence backend (AGY). |
 
 ### Architecture in one diagram
@@ -53,6 +54,12 @@ All work lives in [`koru-application/src/services`](koru-application/src/service
 The system is described as an 8-layer split, with data reasoning owning layers 2–6. Edge / Telemetry feeds layer 1, AGY Pipeline persists layer 8, UX renders layer 7. The 8 layers are *logical* boundaries (data contracts and responsibilities) rather than separate processes — in the current PWA build, layers 2–6 live inside `CoachingService` as a module graph. The boundaries show up in the type system, not the deployment topology, which is a deliberate trade-off for the <50ms HOT-path budget.
 
 ```
+   ┌─────────────────────────────────────────────────────────────────────┐
+   │  DOMAIN EXPERTISE LAYER (Ross Bentley + T-Rod + mentorship)         │
+   │  Decision rules • physics knowledge • persona phrasing • goals      │
+   └─────────────┬─────────────────────────────────┬─────────────────────┘
+                 │ (rules + thresholds)            │ (knowledge + prompts)
+                 ▼                                 ▼
                      ┌─────────────────────────────────────────────────┐
                      │        koru-application (PWA, Pixel 10)         │
                      │                                                 │
@@ -75,7 +82,51 @@ The system is described as an 8-layer split, with data reasoning owning layers 2
 
 **Decision routing:** every frame fans out to three paths. HOT runs heuristics + driver-adapted humanization in-process; COLD prompts Gemini with a skill-adapted prompt and physics context; FEEDFORWARD fires from a 150m geofence around known corners. All three enqueue into a single priority queue, and the TimingGate decides whether the dequeue actually speaks.
 
+The **Domain Expertise Layer** is an explicit cross-cutting concern in the architecture (not a runtime layer in the request path). It is the source of every coaching-judgment value in the system: thresholds in the decision rules, mental-model content in the cold-path prompts, persona phrasing, goal vocabulary, and pedagogical principles like the hustle zone. It is documented in its own section below.
+
 **Data reasoning enriches Gemini, not replaces it:** see the [Architecture → How Data Reasoning Works Alongside Gemini](#how-data-reasoning-works-alongside-gemini) section below for the full framing.
+
+### Domain Expertise Layer
+
+Coaching judgment is not heuristics-with-numbers. Every threshold, phrase, and decision rule in the data-reasoning code traces back to a specific source — an authored curriculum, a recorded coaching session, or an explicit mentorship conversation. We treat these sources as a **first-class architectural layer**: a curated body of domain knowledge that feeds the runtime layers, with attribution preserved end-to-end.
+
+#### Sources
+
+| Source | Material | What it produces |
+|---|---|---|
+| **Ross Bentley — _Speed Secrets_** | 44-page curriculum, read in full | Mental models (friction circle, weight transfer, vision, maintenance throttle, trail braking, inside-out coaching) injected into the cold-path system prompt. Trigger phrases ("Hard initial!", "Eyes up!", "Hustle!", "Squeeze, don't stab") used as BEGINNER-skill phrasing. |
+| **Ross Bentley mentorship — Apr 15, 2026** | Recorded session (transcript + notes) | "1–3 specific physical changes per session" → `SessionGoal` shape (max 3). Hustle zone detection (`checkHustle`). Inside-out coaching style for the BEGINNER prompt. Fear/cognitive overload signals → `COGNITIVE_OVERLOAD` rule. |
+| **T-Rod coaching session at Sonoma** | 3,291-word transcript of real beginner coaching | 5 patterns extracted into [`koru-application/src/data/trodCoachingData.ts`](koru-application/src/data/trodCoachingData.ts). Feel-based phrasing for BEGINNER persona ("Pick a pedal", "Wait for it... NOW! Full throttle", "Squeeze, don't stab"). 4 decision rules: `EARLY_THROTTLE`, `LIFT_MID_CORNER`, `SPIKE_BRAKE`, `COGNITIVE_OVERLOAD`. |
+| **Brian Luc mentorship — Apr 14, 2026** | Hardware + edge mentorship | Hardware tier validation; informed the latency budget framing ("800ms late > silence"); shaped the GPS+IMU degraded-mode design captured in the [Telemetry Capability Matrix](docs/data-reasoning.md#telemetry-capability-matrix-degraded-modes). |
+| **Garmin Catalyst (SOTA reference)** | Public reviews, Ross was a consultant | Differentiation matrix in the [comparison table](#comparison-vs-garmin-catalyst-the-sota-were-trying-to-beat) below. Defines what we choose NOT to do (numbers-only post-hoc analysis). |
+
+#### Where it lives in code
+
+The domain expertise is materialized in three artifacts:
+
+- [`koru-application/src/utils/coachingKnowledge.ts`](koru-application/src/utils/coachingKnowledge.ts) — `RACING_PHYSICS_KNOWLEDGE` (the Ross Bentley mental-model corpus injected verbatim into every cold-path prompt) and `DECISION_MATRIX` (12 rules, each a tuple of `(action, condition string, telemetry predicate)`).
+- [`koru-application/src/data/trodCoachingData.ts`](koru-application/src/data/trodCoachingData.ts) — patterns extracted from the T-Rod transcript, used to derive the BEGINNER phrasing and the four T-Rod-specific decision rules.
+- [`koru-application/src/services/coachingService.ts` → `humanizeAction`](koru-application/src/services/coachingService.ts) — ~250 lines of skill-adapted phrasing across 5 personas × 3 skill levels × ~20 actions. The BEGINNER row is sourced from Ross Bentley trigger phrases + the T-Rod transcript verbatim where applicable.
+
+#### Provenance map (selected)
+
+| Code artifact | Source | Quote / reference |
+|---|---|---|
+| `RACING_PHYSICS_KNOWLEDGE → "Friction Circle (Clock Metaphor)"` | Ross Bentley curriculum | "12 o'clock is max braking, 6 is max acceleration, 3 and 9 are max cornering." |
+| `DECISION_MATRIX → EARLY_THROTTLE` (`throttle>30 && \|gLat\|>0.6 && gLong<-0.1`) | T-Rod transcript | Repeated correction: "wait for the exit before getting on the gas." |
+| `DECISION_MATRIX → SPIKE_BRAKE` (`brake>70 && gLong<-1.2`) | T-Rod transcript | "Brake trace should be a ski slope, not a cliff. Squeeze, don't stab." |
+| `DECISION_MATRIX → COGNITIVE_OVERLOAD` | Ross Bentley mentorship Apr 15 | Fear and cognitive load are leading indicators a beginner is past their limit; signal: input-smoothness collapse. |
+| `checkHustle` (`throttle 50–92% on exit, BEGINNER only`) | Ross Bentley mentorship Apr 15 | Hustle zones — "drivers get lazy mid-session; that last 10–15% throttle matters for exit speed." |
+| `humanizeAction(BEGINNER, COMMIT)` → "Commit! Full throttle now — the car can take it." | Ross Bentley trigger phrases | Inside-out coaching: short, action-first, no jargon. |
+| `humanizeAction(BEGINNER, COAST)` → "Pick a pedal — gas or brake. Stay committed!" | T-Rod transcript verbatim | Direct coaching command from the recorded session. |
+| `SessionGoal` (max 3 per session) | Ross Bentley mentorship Apr 15 | "1–3 specific physical changes per session." |
+| BEGINNER timing config: 3 s cooldown, blackout in MID_CORNER + APEX | Ross Bentley pedagogy | Beginners process slower; never coach mid-apex. |
+
+A more complete map lives in [`docs/data-reasoning.md`](docs/data-reasoning.md#domain-expertise-layer-provenance).
+
+#### Why this matters for the gate
+
+Coaching judgment is the layer that separates this project from a heuristic-with-numbers system like Garmin Catalyst. The reviewer ask is to see the layer **explicitly**: where it comes from, where it lands in code, and how it is kept honest as the project evolves. The provenance map above is the primary deliverable; it lets a reviewer pick any line of coaching output and trace it back to its source material.
 
 ### What we'd value reviewer input on (April 29)
 
@@ -85,7 +136,7 @@ The hard technical gate is two days out. These are the areas where outside revie
 2. **Safety bypass surface area.** P0 (`OVERSTEER_RECOVERY`, and future `BRAKE`) is the only intended path that bypasses the TimingGate. After PR #3, `boostForGoals` is floored at P1 so no goal-promoted action can reach P0. The TimingGate state machine (`OPEN → DELIVERING → COOLDOWN → BLACKOUT`) and the COOLDOWN-interrupted-by-BLACKOUT restoration in [`timingGate.ts`](koru-application/src/services/timingGate.ts) are the load-bearing pieces — fresh eyes are welcome.
 3. **Driver model.** Smoothness + coasting are coarse proxies. The 10s window + 5s hysteresis + re-promotion guard keep the classification stable, but the underlying signals haven't been validated against actual coach assessments. Reviewer feedback on whether this is a reasonable v1 versus a placeholder would be useful.
 4. **Offline behavior.** Cold path resets `lastColdTime = 0` on fetch failure so the next frame can retry. HOT + FEEDFORWARD work without network. Worth confirming the offline contract is clear enough for the May 23 Sonoma field test.
-5. **Coaching content.** `humanizeAction` covers 5 personas × ~20 actions × 3 skill levels — a lot of strings. The BEGINNER set is derived from Ross Bentley pedagogy and the T-Rod Sonoma session. A spot-check against the T-Rod transcript would help.
+5. **Coaching content / Domain Expertise Layer.** `humanizeAction` covers 5 personas × ~20 actions × 3 skill levels — a lot of strings. The BEGINNER set is derived from Ross Bentley pedagogy and the T-Rod Sonoma session, and every threshold in `DECISION_MATRIX` is sourced. The [Domain Expertise Layer](#domain-expertise-layer) section documents the provenance map. A spot-check of any coaching line against its cited source would be useful.
 6. **Cross-team contracts.** Phase 6.2 depends on UX (Rabimba) — see [`docs/pre-race-chat-contract.md`](docs/pre-race-chat-contract.md). Phase 6.3 depends on AGY Pipeline (Mike) — `DriverProfileStore` interface in [`types.ts`](koru-application/src/types.ts). Useful for reviewers to sanity-check whether these contracts are enough for the downstream pods to start.
 7. **Test coverage.** 81 unit + integration tests with regressions for every blocker fix, plus the new latency benchmark. Acknowledged gaps: no soak test for queue under burst input; no end-to-end test of cold-path retry on the actual Gemini endpoint. Flagging in case either is needed before the field test.
 
