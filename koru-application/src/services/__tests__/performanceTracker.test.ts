@@ -131,6 +131,50 @@ describe('PerformanceTracker', () => {
     expect(tracker.getCornerTrend(1)).toBeNull(); // need 2+ snapshots
   });
 
+  it('surfaces the previous corner improvement when transitioning directly to a new corner (chicane)', () => {
+    // Lap 1 through corner 9 — exit 60 mph.
+    tracker.update(createFrame(80, 60, 10), 'BRAKE_ZONE', 9, 'Turn 9');
+    tracker.update(createFrame(50, 0, 80), 'APEX', 9, 'Turn 9');
+    tracker.update(createFrame(60, 0, 100), 'EXIT', 9, 'Turn 9');
+    tracker.update(createFrame(65, 0, 100), 'STRAIGHT', null, null);
+
+    tracker.newLap();
+
+    // Lap 2 — corner 9 with +5 mph exit, then chicane straight into corner 10
+    // (no STRAIGHT phase between). The improvement decision for corner 9 must
+    // surface when entering corner 10 — previously dropped (Cursor Bugbot).
+    tracker.update(createFrame(80, 60, 10), 'BRAKE_ZONE', 9, 'Turn 9');
+    tracker.update(createFrame(52, 0, 85), 'APEX', 9, 'Turn 9');
+    tracker.update(createFrame(65, 0, 100), 'EXIT', 9, 'Turn 9');
+    // Direct transition into corner 10 (chicane) — flushCorner of 9 fires here.
+    const decision = tracker.update(createFrame(70, 50, 10), 'BRAKE_ZONE', 10, 'Turn 10');
+
+    expect(decision).not.toBeNull();
+    expect(decision!.priority).toBe(3);
+    expect(decision!.text).toContain('Exit speed up');
+  });
+
+  it('newLap returns the improvement decision when a corner was in progress at lap end', () => {
+    // Lap 1 — exit 60.
+    tracker.update(createFrame(80, 60, 10), 'BRAKE_ZONE', 7, 'Turn 7');
+    tracker.update(createFrame(50, 0, 80), 'APEX', 7, 'Turn 7');
+    tracker.update(createFrame(60, 0, 100), 'EXIT', 7, 'Turn 7');
+    tracker.update(createFrame(65, 0, 100), 'STRAIGHT', null, null);
+
+    tracker.newLap();
+
+    // Lap 2 — corner 7 with improved exit, but lap line is crossed before
+    // STRAIGHT is reached (start/finish inside the corner sequence).
+    tracker.update(createFrame(80, 60, 10), 'BRAKE_ZONE', 7, 'Turn 7');
+    tracker.update(createFrame(52, 0, 85), 'APEX', 7, 'Turn 7');
+    tracker.update(createFrame(66, 0, 100), 'EXIT', 7, 'Turn 7');
+    // Lap detection fires here — newLap must surface the flushed improvement.
+    const decision = tracker.newLap();
+
+    expect(decision).not.toBeNull();
+    expect(decision!.priority).toBe(3);
+  });
+
   it('stores the cornerName on both the snapshot and history (regression)', () => {
     tracker.update(createFrame(80, 60, 10), 'BRAKE_ZONE', 7, 'Turn 7');
     tracker.update(createFrame(50, 0, 80), 'APEX', 7, 'Turn 7');

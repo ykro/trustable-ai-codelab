@@ -269,6 +269,31 @@ describe('CoachingService Phase 6', () => {
       }
     });
 
+    it('floors at P1 — never promotes a non-safety action to P0 (Cursor Bugbot regression)', () => {
+      // EARLY_THROTTLE is P1 in ACTION_PRIORITY. If a goal lists it, the boost must
+      // floor at 1, NOT subtract to 0. P0 triggers preempt() and bypasses the
+      // TimingGate blackout — a tactical tip must never reach that level.
+      service.setSessionGoals([
+        {
+          id: 'g1',
+          focus: 'throttle',
+          description: 'Hold throttle until exit',
+          source: 'pre_race_chat',
+          prioritizedActions: ['EARLY_THROTTLE'],
+        },
+      ]);
+      // EARLY_THROTTLE rule: throttle > 30 && |gLat| > 0.6 && gLong < -0.1.
+      // Frame.time > 180 → session phase 3 (EARLY_THROTTLE is suppressed in phase 1).
+      // Frame is crafted to skip earlier matrix entries (OVERSTEER, THRESHOLD,
+      // TRAIL_BRAKE, COMMIT, THROTTLE, PUSH, COAST, HESITATION, FULL_THROTTLE).
+      service.processFrame(createFrame({
+        time: 200, throttle: 50, brake: 0, gLat: 0.7, gLong: -0.5, speed: 60,
+      }));
+      const early = decisions.find(d => d.action === 'EARLY_THROTTLE');
+      expect(early).toBeDefined();
+      expect(early!.priority).toBe(1); // floored at 1, not promoted to 0
+    });
+
     it('does not boost P0 safety actions (floor at 0)', () => {
       service.setSessionGoals([
         {

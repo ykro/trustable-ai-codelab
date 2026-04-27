@@ -7,10 +7,8 @@ import { CoachingQueue } from './coachingQueue';
 import { DriverModel } from './driverModel';
 import { PerformanceTracker } from './performanceTracker';
 
-/** Safety actions that bypass blackout and cooldown */
-const SAFETY_ACTIONS: Set<CoachAction> = new Set(['OVERSTEER_RECOVERY', 'BRAKE']);
-
-/** Map actions to priority levels (module-level Map avoids per-call array allocations) */
+/** Map actions to priority levels (module-level Map avoids per-call array allocations).
+ *  Safety bypass is determined by `priority === 0` at the call site, not by a separate set. */
 const ACTION_PRIORITY: Map<string, 0 | 1 | 2 | 3> = new Map([
   ['OVERSTEER_RECOVERY', 0], ['BRAKE', 0],
   ['EARLY_THROTTLE', 1], ['LIFT_MID_CORNER', 1], ['SPIKE_BRAKE', 1],
@@ -86,8 +84,12 @@ export class CoachingService {
   getSessionGoals() { return this.sessionGoals; }
   getPerformanceTracker() { return this.performanceTracker; }
 
-  /** Call when a new lap starts (e.g. from lap detection logic) */
-  newLap(): void { this.performanceTracker.newLap(); }
+  /** Call when a new lap starts (e.g. from lap detection logic).
+   *  Surfaces the flushed corner's improvement decision into the queue. */
+  newLap(): void {
+    const improvement = this.performanceTracker.newLap();
+    if (improvement) this.coachingQueue.enqueue(improvement);
+  }
 
   /**
    * Set session goals (Phase 6.2).
@@ -105,11 +107,16 @@ export class CoachingService {
     );
   }
 
-  /** One-tier boost for actions the driver is actively working on. P0 is unchanged. */
+  /**
+   * One-tier boost for actions the driver is actively working on.
+   * Floor is 1 (not 0): P0 is reserved for safety and triggers preempt() which
+   * bypasses the TimingGate blackout. A goal-boosted P1 must NEVER cross that
+   * line, or a tactical message could fire mid-apex (Cursor Bugbot, PR #2).
+   */
   private boostForGoals(action: CoachAction, base: 0 | 1 | 2 | 3): 0 | 1 | 2 | 3 {
     if (base === 0) return 0;
     if (!this.prioritizedActionSet.has(action)) return base;
-    return (base - 1) as 0 | 1 | 2 | 3;
+    return Math.max(1, base - 1) as 1 | 2 | 3;
   }
 
   onCoaching(cb: CoachingCallback) {
