@@ -52,7 +52,7 @@ export class CoachingService {
   private track: Track | null = null;
   private lastSkillLevel: import('../types').SkillLevel = 'BEGINNER';
   private lastCognitiveCheck = 0;
-  private lastHustleCheck = 0;
+  private lastHustleFire = 0;
 
   // Session goals (Phase 6.2 — populated by pre-race chat or auto-generated).
   // Actions that appear in any active goal's prioritizedActions get promoted
@@ -76,6 +76,9 @@ export class CoachingService {
   setTrack(track: Track): void {
     this.track = track;
     this.cornerDetector.setTrack(track);
+    // Drop the stale corner reference so the feedforward path doesn't compare
+    // a fresh corner against a stale identity from the previous track.
+    this.lastCorner = null;
   }
 
   getTimingState() { return this.timingGate.getState(); }
@@ -280,11 +283,12 @@ export class CoachingService {
    * Detect lazy throttle application on exits (Ross Bentley "hustle zones").
    * Drivers get lazy mid-session — brain says "why go to 100% for 2 seconds?"
    * But that last 10-15% throttle matters for exit speed onto straights.
-   * Fires every 8 seconds when on straight/acceleration with throttle 50-92%.
-   * Beginner-focused: only fires for BEGINNER skill level.
+   * Fires HUSTLE at most once every 8 seconds (throttle is on the fire, not on
+   * the check — eligibility is re-evaluated every frame so we don't miss the
+   * moment conditions actually match). Beginner-focused: BEGINNER skill only.
    */
   private checkHustle(frame: TelemetryFrame): void {
-    if (frame.time - this.lastHustleCheck < 8) return;
+    if (frame.time - this.lastHustleFire < 8) return;
     if (this.driverModel.getSkillLevel() !== 'BEGINNER') return;
 
     const onExit = this.currentPhase === 'ACCELERATION' || this.currentPhase === 'STRAIGHT';
@@ -293,7 +297,7 @@ export class CoachingService {
     const lowLateralG = Math.abs(frame.gLat) < 0.3;
 
     if (onExit && lazyThrottle && movingFast && lowLateralG) {
-      this.lastHustleCheck = frame.time;
+      this.lastHustleFire = frame.time;
       this.coachingQueue.enqueue({
         path: 'hot',
         action: 'HUSTLE',
@@ -546,7 +550,16 @@ export class CoachingService {
       case 'HUSTLE': return 'Hustle! Get on that throttle — full commit!';
     }
 
-    return action;
+    // Defensive fallback: if a new CoachAction is added to the union and not
+    // wired into a persona switch, we MUST NOT speak the raw enum identifier
+    // (e.g. "SPIKE_BRAKE") at the driver. Empty string is filtered upstream
+    // by the audio service. Surface the gap loudly in dev builds.
+    if (import.meta.env.DEV) {
+      console.warn(
+        `[humanizeAction] no phrase for action="${action}" coach="${this.getCoach().id}" skill="${skillLevel}"`,
+      );
+    }
+    return '';
   }
 
   // ── COLD PATH: Gemini Cloud detailed analysis ──────────
@@ -643,10 +656,18 @@ ${instruction}`;
   }
 
   private findNearestCorner(lat: number, lon: number, corners: Corner[]): Corner | null {
+    // Pick the geometrically closest corner within 150m — not the first one in
+    // array order. At Sonoma's T2/T3 complex two corner geofences can overlap;
+    // returning the actually-closest avoids array-order determining which advice fires.
+    let nearest: Corner | null = null;
+    let minDist = 150;
     for (const c of corners) {
       const dist = haversineDistance(lat, lon, c.lat, c.lon);
-      if (dist < 150) return c;
+      if (dist < minDist) {
+        minDist = dist;
+        nearest = c;
+      }
     }
-    return null;
+    return nearest;
   }
 }

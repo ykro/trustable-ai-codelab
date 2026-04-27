@@ -92,7 +92,18 @@ export class TimingGate {
     return this.state === 'OPEN';
   }
 
-  /** Mark that a message delivery has started */
+  /**
+   * Mark that a message delivery has started.
+   *
+   * Re-entry semantics (P0 preempting another P0 mid-delivery):
+   * - state stays DELIVERING.
+   * - lastDeliveryTime is reset to now, so the new message gets a full
+   *   deliveryMs window and the COOLDOWN that follows is anchored to the
+   *   most recent message — never reopens the gate prematurely.
+   * - Audio cut-off is the audio layer's responsibility, not this gate's.
+   *   For two back-to-back P0 safety calls that is the correct behavior:
+   *   the newer safety message must take over.
+   */
   startDelivery(): void {
     this.lastDeliveryTime = Date.now();
     this.state = 'DELIVERING';
