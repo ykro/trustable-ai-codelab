@@ -257,6 +257,33 @@ The CSV fixture uses TrackAddict column format (`Speed (MPH)`, `Accel X`, `Accel
 
 ---
 
+## Telemetry Capability Matrix (Degraded Modes)
+
+The data-reasoning layer is built to degrade gracefully when telemetry channels go missing. Field-test reality: BT Classic from the OBDLink MX+ may not reach the PWA in time for May 23 (see `Edge / Telemetry` TODOs on `main`). This table documents what coaching capability exists in each mode.
+
+| Channel set | Available signals | Decision rules that fire | Driver model | Coverage |
+|---|---|---|---|---|
+| **Full (RaceBox + OBD)** | lat/lon, speed, gLat, gLong, brake %, throttle %, RPM, gear | All 12 rules in `DECISION_MATRIX` + HUSTLE + COGNITIVE_OVERLOAD | Full smoothness + coasting classification (BEG/INT/ADV) | 100% |
+| **GPS + IMU only (RaceBox-only fallback)** | lat/lon, speed, gLat, gLong, derived brake/throttle from `telemetryStreamService` G-force estimator | OVERSTEER_RECOVERY, COMMIT, THROTTLE, COAST, PUSH, FULL_THROTTLE, FEEDFORWARD corner advice. Conditional: TRAIL_BRAKE / EARLY_THROTTLE / LIFT_MID_CORNER fire when gLat thresholds match. Excluded: THRESHOLD, SPIKE_BRAKE (need real brake %). | Smoothness/coasting based on synthesized signals — **biased toward BEGINNER classification** because synthetic brake/throttle have low variance | ~60–70% of actions |
+| **GPS only (no IMU)** | lat/lon, speed | FEEDFORWARD only (corner geofence advice). No threshold-based hot path. | Cannot classify; defaults to BEGINNER. | ~20% — feedforward only |
+| **OBD only (no GPS)** | brake %, throttle %, RPM, gear, speed | THRESHOLD, TRAIL_BRAKE, COMMIT, THROTTLE, PUSH, COAST, HESITATION, FULL_THROTTLE, EARLY_THROTTLE, LIFT_MID_CORNER, SPIKE_BRAKE, COGNITIVE_OVERLOAD. No FEEDFORWARD (no track position), no OVERSTEER_RECOVERY (no gLat). | Full classification possible. | ~80%, but no corner-specific advice |
+
+**Field-test implication:** if BT Classic doesn't ship before May 23, we expect to run in GPS+IMU mode. Roughly 60–70% of coaching actions still fire. The DriverModel will tend to classify as BEGINNER because synthetic brake/throttle from the G-force estimator have low variance — for the Beginner Pod this is the safe default, but it means INTERMEDIATE/ADVANCED classification is effectively unavailable until ET-1 (extended `streaming-telemetry-server`) lands.
+
+**Suggested follow-up for ET-1 (Edge pod):** when the merged telemetry stream lands, it would help to expose a `signals: { brake: 'real' | 'estimated', throttle: 'real' | 'estimated' }` metadata field on each frame, so the DriverModel can opt out of classifying off synthetic signals. Until then, `koru-application/src/services/telemetryStreamService.ts:185-190` keeps the G-force estimator in place as a fallback.
+
+## Cold path design notes (Gemini cloud)
+
+The COLD path is intentionally a small REST call rather than a richer Gemini integration. A few decisions worth flagging:
+
+- **Free-text response, not structured output.** The model's response is consumed by TTS, so structure (JSON schema, function calling) would add round-trip overhead with no parsing benefit downstream.
+- **No multi-turn context.** Each frame is a fresh context — session state lives in `DriverModel`, `PerformanceTracker`, and `SessionGoal[]` in-process. Carrying conversation history into the Gemini context window would inflate token cost without observed quality gains, and would couple session state to a remote service that may be unreachable at the track.
+- **Static `RACING_PHYSICS_KNOWLEDGE` injected per call.** Roughly 1 KB of curated Ross Bentley + physics reference. Not large enough today to justify a system-instruction or implicit-cache pattern, though both would be reasonable optimizations later.
+- **Skill-adapted instruction.** The DriverModel-derived skill level rewrites the user instruction (BEGINNER → "feel-based, under 10 words"; ADVANCED → "data-driven, under 15 words"). This is the part that makes the prompt substantive; the rest is plumbing.
+- **Cooldown-gated, not per-frame.** 15s cooldown between calls (20s for BEGINNER) — the COLD path is a strategic narrator, not a real-time reflex. Real-time work belongs to the HOT path and FEEDFORWARD.
+
+What this implementation is *not*: it is not a thin REST wrapper around Gemini that makes Gemini "the AI" of the system. The judgment about *what* to send, *when*, and at *what skill level* lives in the data-reasoning layer; Gemini is the language and voice of the coach, not the policy.
+
 ## Architecture Diagram
 
 ```

@@ -114,8 +114,13 @@ export class DriverModel {
       return sumSq / arr.length - mean * mean;
     };
 
-    const tVar = Math.min(variance(this.throttleDeltas) / 2500, 1);
-    const bVar = Math.min(variance(this.brakeDeltas) / 2500, 1);
+    // Calibration: throttle/brake are 0-100 percent (normalized by telemetryStreamService).
+    // 2500 = 50^2 — variance produced by an "erratic" driver who swings ±50% per frame.
+    // Anything ≥2500 saturates to "fully unsmooth"; well-controlled inputs sit near 0.
+    // If the upstream scaling ever changes (e.g. raw OBD 0–255), recalibrate this constant.
+    const SMOOTHNESS_VARIANCE_FLOOR = 2500;
+    const tVar = Math.min(variance(this.throttleDeltas) / SMOOTHNESS_VARIANCE_FLOOR, 1);
+    const bVar = Math.min(variance(this.brakeDeltas) / SMOOTHNESS_VARIANCE_FLOOR, 1);
     const combined = tVar * 0.5 + bVar * 0.5;
 
     return Math.max(0, Math.min(1, 1 - combined));

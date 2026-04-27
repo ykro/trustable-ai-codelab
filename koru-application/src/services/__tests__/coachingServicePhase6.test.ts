@@ -312,6 +312,44 @@ describe('CoachingService Phase 6', () => {
       expect(recovery!.priority).toBe(0); // P0 must stay P0 — no wrap-around to negative
     });
 
+  });
+
+  describe('Feedforward picks the geometrically nearest corner', () => {
+    it('returns the closest corner within 150m, not the first in array order', () => {
+      // Two overlapping geofences near Sonoma. Corner A at ~60m north of car,
+      // corner B at ~30m north. A appears first in the corners array, but B
+      // is closer. Pre-fix the loop returned A (first match wins); post-fix B.
+      // Using non-(0,0) coords because isValidGps rejects the (0,0) sentinel.
+      const carLat = 38.16, carLon = -122.45;
+      const cornerA = {
+        id: 1, name: 'Turn A', entryDist: 0, apexDist: 0, exitDist: 0,
+        lat: carLat + 0.000539, lon: carLon, advice: 'A advice', // ~60m north
+      };
+      const cornerB = {
+        id: 2, name: 'Turn B', entryDist: 0, apexDist: 0, exitDist: 0,
+        lat: carLat + 0.000270, lon: carLon, advice: 'B advice', // ~30m north
+      };
+      service.setTrack({
+        name: 'Synthetic', length: 1000,
+        sectors: [{ id: 1, name: 'S1', startDist: 0, endDist: 1000 }],
+        corners: [cornerA, cornerB], // A listed first
+        mapPoints: [{ x: 0, y: 0 }],
+        recordLap: 60,
+        center: { lat: carLat, lng: carLon },
+      });
+
+      service.processFrame(createFrame({
+        time: 0, latitude: carLat, longitude: carLon, speed: 60,
+      }));
+
+      const ff = decisions.find(d => d.path === 'feedforward');
+      expect(ff).toBeDefined();
+      expect(ff!.text).toContain('Turn B'); // closer one wins
+      expect(ff!.text).not.toContain('Turn A');
+    });
+  });
+
+  describe('Session goals — clearing', () => {
     it('clears prioritized actions when setSessionGoals is called with empty array', () => {
       service.setSessionGoals([
         { id: 'g1', focus: 'throttle', description: '', source: 'auto_generated', prioritizedActions: ['HUSTLE'] },
