@@ -96,4 +96,31 @@ describe('TimingGate', () => {
     expect(gate.canDeliver(0)).toBe(true);
     expect(gate.canDeliver(1)).toBe(false);
   });
+
+  it('P0 re-entry during DELIVERING anchors the cooldown to the new message', () => {
+    // First P0 starts delivering at t=1000.
+    gate.startDelivery();
+    expect(gate.getState()).toBe('DELIVERING');
+
+    // 500ms later a second P0 preempts (e.g., OVERSTEER while BRAKE is speaking).
+    vi.setSystemTime(1500);
+    gate.startDelivery();
+    expect(gate.getState()).toBe('DELIVERING');
+
+    // The original deliveryMs window from t=1000 ends at t=3000 — but
+    // because the new message reset the anchor, the gate must remain
+    // DELIVERING until t=3500 (1500 + 2000), not reopen at t=3000.
+    vi.setSystemTime(3000);
+    gate.update('STRAIGHT');
+    expect(gate.getState()).toBe('DELIVERING');
+
+    vi.setSystemTime(3500);
+    gate.update('STRAIGHT');
+    expect(gate.getState()).toBe('COOLDOWN');
+
+    // And cooldown ends 1500ms after that, anchored to the second message.
+    vi.setSystemTime(5000);
+    gate.update('STRAIGHT');
+    expect(gate.getState()).toBe('OPEN');
+  });
 });
