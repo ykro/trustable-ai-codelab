@@ -1,6 +1,6 @@
 # Trustable AI Race Coach
 
-Today's best telemetry systems — including the SOTA Garmin Catalyst — run on fixed, deterministic rules. They tell you what went wrong after the fact, with numbers. This project takes a different approach: a multimodal, agentic AI system built on Google's latest stack (Gemini Nano on-device + Gemini API) that processes real-time data streams to deliver context-aware coaching as it happens, adapted to driver skill level.
+Today's best telemetry systems — including the SOTA Garmin Catalyst — run on fixed, deterministic rules. They tell you what went wrong after the fact, with numbers. This project takes a different approach: a multimodal, agentic AI system built on Google's stack — Gemini API for cloud reasoning today, with on-device inference (Gemini Nano via the Chrome Prompt API, or a Gemma model) explored as part of the roadmap — that processes real-time data streams to deliver context-aware coaching as it happens, adapted to driver skill level.
 
 The goal is to build a reference architecture that proves a split-brain AI can be trusted in a mission-critical, zero-latency environment. The patterns and learnings from high-frequency racing telemetry are designed to translate to broader enterprise domains where real-time AI decision-making under pressure is the challenge.
 
@@ -50,7 +50,7 @@ All work lives in [`koru-application/src/services`](koru-application/src/service
 
 ### Architecture in one diagram
 
-The system is an 8-layer split, with data reasoning owning layers 2–6. Edge / Telemetry feeds layer 1, AGY Pipeline persists layer 8, UX renders layer 7.
+The system is described as an 8-layer split, with data reasoning owning layers 2–6. Edge / Telemetry feeds layer 1, AGY Pipeline persists layer 8, UX renders layer 7. The 8 layers are *logical* boundaries (data contracts and responsibilities) rather than separate processes — in the current PWA build, layers 2–6 live inside `CoachingService` as a module graph. The boundaries show up in the type system, not the deployment topology, which is a deliberate trade-off for the <50ms HOT-path budget.
 
 ```
                      ┌─────────────────────────────────────────────────┐
@@ -77,17 +77,21 @@ The system is an 8-layer split, with data reasoning owning layers 2–6. Edge / 
 
 **Data reasoning enriches Gemini, not replaces it:** see the [Architecture → How Data Reasoning Works Alongside Gemini](#how-data-reasoning-works-alongside-gemini) section below for the full framing.
 
-### What reviewers should evaluate on April 29
+### What we'd value reviewer input on (April 29)
 
-The hard technical gate is two days out. The following are the concrete aspects we want pressure-tested:
+The hard technical gate is two days out. These are the areas where outside review would be most useful — both to validate decisions we're confident in and to surface concerns we may have under-weighted.
 
-1. **Latency budget under load.** HOT path is <50ms by design — does it hold at sustained 25 Hz on a Pixel 10 PWA with Gemini cold-path requests in flight, audio playing, and a screen lock active? Per-frame allocations were removed; verify there are no others (e.g. inside `humanizeAction` string templating, `CoachingQueue.enqueue` Map ops).
-2. **Safety bypass surface area.** P0 (`OVERSTEER_RECOVERY`, future `BRAKE`) is the only path that legitimately bypasses the TimingGate. After PR #3, `boostForGoals` is floored at P1, so no goal-promoted action can reach P0. Walk through the TimingGate state machine (`OPEN → DELIVERING → COOLDOWN → BLACKOUT`) and confirm there is no other sneak path — especially the COOLDOWN-interrupted-by-BLACKOUT restoration logic ([`timingGate.ts`](koru-application/src/services/timingGate.ts)).
-3. **Driver model accuracy and stability.** Smoothness + coasting are coarse signals; the 5 s hysteresis + re-promotion guard is what keeps the system from oscillating. Does the classifier behave reasonably on real Sonoma data, and do the BEGINNER/INTERMEDIATE/ADVANCED thresholds still hold for non-GR86 drivers?
-4. **Offline behavior.** Cold path resets `lastColdTime = 0` on fetch failure so the next frame can retry. HOT + FEEDFORWARD must work fully offline. Is the offline contract spelled out clearly enough for the field test (May 23 Sonoma)?
-5. **Coaching content quality.** Are the Ross Bentley + T-Rod-derived phrases actually what a beginner driver should hear? `humanizeAction` covers 5 personas × 20+ actions × 3 skill levels — content sprawl risk. Suggest spot-checking the BEGINNER set against the T-Rod transcript.
-6. **Cross-team interface contracts.** Phase 6.2 needs UX (Rabimba) — see [`docs/pre-race-chat-contract.md`](docs/pre-race-chat-contract.md). Phase 6.3 needs AGY Pipeline (Mike) — `DriverProfileStore` interface in [`types.ts`](koru-application/src/types.ts). These are the integration cliffs; reviewers should verify the contracts are sufficient for downstream pods to start work.
-7. **Test coverage gaps.** 81 tests, with regression coverage on every blocker fix. Gaps known: no end-to-end latency benchmark; no soak test for queue under burst input; no test for cold-path retry recovery (only the reset is unit-tested). Worth flagging if these are gating concerns for the May 23 field test.
+1. **Latency budget.** The HOT path is designed for <50ms; we now have a benchmark test ([`coachingService.latency.test.ts`](koru-application/src/services/__tests__/coachingService.latency.test.ts)) reporting mean and p99 over 1000 frames. We have not yet measured on a Pixel 10 with audio + Gemini in flight; that measurement is the most useful thing reviewers could push for.
+2. **Safety bypass surface area.** P0 (`OVERSTEER_RECOVERY`, and future `BRAKE`) is the only intended path that bypasses the TimingGate. After PR #3, `boostForGoals` is floored at P1 so no goal-promoted action can reach P0. The TimingGate state machine (`OPEN → DELIVERING → COOLDOWN → BLACKOUT`) and the COOLDOWN-interrupted-by-BLACKOUT restoration in [`timingGate.ts`](koru-application/src/services/timingGate.ts) are the load-bearing pieces — fresh eyes are welcome.
+3. **Driver model.** Smoothness + coasting are coarse proxies. The 10s window + 5s hysteresis + re-promotion guard keep the classification stable, but the underlying signals haven't been validated against actual coach assessments. Reviewer feedback on whether this is a reasonable v1 versus a placeholder would be useful.
+4. **Offline behavior.** Cold path resets `lastColdTime = 0` on fetch failure so the next frame can retry. HOT + FEEDFORWARD work without network. Worth confirming the offline contract is clear enough for the May 23 Sonoma field test.
+5. **Coaching content.** `humanizeAction` covers 5 personas × ~20 actions × 3 skill levels — a lot of strings. The BEGINNER set is derived from Ross Bentley pedagogy and the T-Rod Sonoma session. A spot-check against the T-Rod transcript would help.
+6. **Cross-team contracts.** Phase 6.2 depends on UX (Rabimba) — see [`docs/pre-race-chat-contract.md`](docs/pre-race-chat-contract.md). Phase 6.3 depends on AGY Pipeline (Mike) — `DriverProfileStore` interface in [`types.ts`](koru-application/src/types.ts). Useful for reviewers to sanity-check whether these contracts are enough for the downstream pods to start.
+7. **Test coverage.** 81 unit + integration tests with regressions for every blocker fix, plus the new latency benchmark. Acknowledged gaps: no soak test for queue under burst input; no end-to-end test of cold-path retry on the actual Gemini endpoint. Flagging in case either is needed before the field test.
+
+### Telemetry capability matrix (degraded modes)
+
+If BT Classic on the OBDLink MX+ doesn't reach the PWA in time for May 23, the system runs in a degraded telemetry mode. A breakdown of what coaching capability survives in each channel set is documented in [`docs/data-reasoning.md` → Telemetry Capability Matrix](docs/data-reasoning.md#telemetry-capability-matrix-degraded-modes). Short version: GPS + IMU only retains roughly 60–70% of coaching actions, with FEEDFORWARD corner advice intact, but DriverModel classification leans BEGINNER because synthetic brake/throttle from G-force estimation have low variance.
 
 ### Comparison vs. Garmin Catalyst (the SOTA we're trying to beat)
 
@@ -101,7 +105,7 @@ The hard technical gate is two days out. The following are the concrete aspects 
 | Hustle detection | No | Lazy-throttle detection on exits (Ross Bentley insight) |
 | Session goals | No | 1–3 focus areas bias hot-path priority |
 | Improvement tracking | Lap times only | Per-corner deltas, lap-over-lap encouragement |
-| Offline | Yes | Yes (HOT + FEEDFORWARD; COLD optional) |
+| Offline | Yes | Yes for HOT + FEEDFORWARD; COLD requires network (degrades silently to HOT-only) |
 
 ---
 
@@ -153,7 +157,7 @@ See [`docs/data-reasoning.md`](docs/data-reasoning.md) for detailed feature docu
 |--------|------|-----------|------|
 | RaceBox Mini | 25Hz GPS + IMU | BLE 5.2 | lat, lon, speed, gLat, gLong, altitude |
 | OBDLink MX+ | 5-8Hz OBD-II | BT Classic 3.0 | throttle, brake, RPM, gear, coolant |
-| Pixel 10 | — | USB-C / BT | Runs coaching app, Gemini Nano on-device |
+| Pixel 10 | — | USB-C / BT | Runs the coaching PWA. On-device inference (Gemini Nano via Chrome Prompt API, or a Gemma model) is roadmap, not deployed today. |
 
 **Team car:** 2024 Subaru GR86 (automatic, DauntlessOBD CAN) — Team 1 Beginner Pod.
 
