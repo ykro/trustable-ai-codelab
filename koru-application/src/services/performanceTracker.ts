@@ -43,10 +43,16 @@ export class PerformanceTracker {
   private currentExitSpeed = 0;
   private inCorner = false;
 
-  /** Call when a new lap starts */
-  newLap(): void {
-    this.flushCorner();
+  /**
+   * Call when a new lap starts.
+   * Returns any improvement decision produced by flushing the in-progress corner
+   * (e.g., a chicane that ends right at the start/finish line). Caller should
+   * enqueue the result if non-null.
+   */
+  newLap(): CoachingDecision | null {
+    const decision = this.flushCorner();
     this.currentLap++;
+    return decision;
   }
 
   /**
@@ -59,9 +65,12 @@ export class PerformanceTracker {
     cornerId: number | null,
     cornerName: string | null,
   ): CoachingDecision | null {
-    // Entered a new corner
+    // Entered a new corner directly from another (chicane / Sonoma 9→10).
+    // The previous corner's improvement decision must surface — without this
+    // capture, lap-over-lap encouragement was silently dropped (Cursor Bugbot, PR #2).
+    let pendingDecision: CoachingDecision | null = null;
     if (cornerId !== null && cornerId !== this.currentCornerId) {
-      this.flushCorner();
+      pendingDecision = this.flushCorner();
       this.currentCornerId = cornerId;
       this.currentCornerName = cornerName ?? '';
       this.currentMinSpeed = frame.speed;
@@ -85,7 +94,7 @@ export class PerformanceTracker {
       return this.flushCorner();
     }
 
-    return null;
+    return pendingDecision;
   }
 
   /** Flush current corner metrics and compare to previous lap */
