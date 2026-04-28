@@ -15,9 +15,7 @@ This system tells you in real time how to adapt and fix it, adjusted to your ski
   - [Domain Expertise Layer](#domain-expertise-layer)
 - [Roadmap](#roadmap)
   - [Data Reasoning](#data-reasoning)
-  - [Edge / Telemetry](#edge--telemetry)
-  - [AGY Pipeline](#agy-pipeline)
-  - [UX / Frontend](#ux--frontend)
+  - [Other pods (Edge / AGY / UX) — see user-stories.md](#edge--telemetry-agy-pipeline-ux--frontend)
   - [Future Work](#future-work)
 - [Hardware Stack](#hardware-stack)
 - [Architecture](#architecture)
@@ -90,15 +88,7 @@ The **Domain Expertise Layer** is an explicit cross-cutting concern in the archi
 
 Coaching judgment is not heuristics-with-numbers. Every threshold, phrase, and decision rule in the data-reasoning code traces back to a specific source — an authored curriculum, a recorded coaching session, or an explicit mentorship conversation. We treat these sources as a **first-class architectural layer**: a curated body of domain knowledge that feeds the runtime layers, with attribution preserved end-to-end.
 
-#### Sources
-
-| Source | Material | What it produces |
-|---|---|---|
-| **Ross Bentley — _Speed Secrets_** | 44-page curriculum, read in full | Mental models (friction circle, weight transfer, vision, maintenance throttle, trail braking, inside-out coaching) injected into the cold-path system prompt. Trigger phrases ("Hard initial!", "Eyes up!", "Hustle!", "Squeeze, don't stab") used as BEGINNER-skill phrasing. |
-| **Ross Bentley mentorship — Apr 15, 2026** | Recorded session (transcript + notes) | "1–3 specific physical changes per session" → `SessionGoal` shape (max 3). Hustle zone detection (`checkHustle`). Inside-out coaching style for the BEGINNER prompt. Fear/cognitive overload signals → `COGNITIVE_OVERLOAD` rule. |
-| **T-Rod coaching session at Sonoma** | 3,291-word transcript of real beginner coaching | 5 patterns extracted into [`koru-application/src/data/trodCoachingData.ts`](koru-application/src/data/trodCoachingData.ts). Feel-based phrasing for BEGINNER persona ("Pick a pedal", "Wait for it... NOW! Full throttle", "Squeeze, don't stab"). 4 decision rules: `EARLY_THROTTLE`, `LIFT_MID_CORNER`, `SPIKE_BRAKE`, `COGNITIVE_OVERLOAD`. |
-| **Brian Luc mentorship — Apr 14, 2026** | Hardware + edge mentorship | Hardware tier validation; informed the latency budget framing ("800ms late > silence"); shaped the GPS+IMU degraded-mode design captured in the [Telemetry Capability Matrix](docs/data-reasoning.md#telemetry-capability-matrix-degraded-modes). |
-| **Garmin Catalyst (SOTA reference)** | Public reviews, Ross was a consultant | Differentiation matrix in the [comparison table](#comparison-vs-garmin-catalyst-the-sota-were-trying-to-beat) below. Defines what we choose NOT to do (numbers-only post-hoc analysis). |
+The full source list (Ross Bentley curriculum + mentorship, T-Rod transcript, Brian Luc mentorship, Garmin Catalyst as SOTA reference) and how each source maps into specific code artifacts is documented in [`docs/data-reasoning.md` → Domain Expertise Layer (provenance)](docs/data-reasoning.md#domain-expertise-layer-provenance).
 
 #### Where it lives in code
 
@@ -201,48 +191,15 @@ See [`docs/data-reasoning.md`](docs/data-reasoning.md) for detailed feature docu
 - [x] **6.4 In-Session Improvement Tracking** — `PerformanceTracker` tracks per-corner metrics (min speed, brake point, throttle %, corner name) within a session. Lap-over-lap delta emits P3 encouragement on improvement. Cross-session trends require persistence layer (Phase 6.3).
 - [ ] **Auto-generation of session goals from DriverProfile** — Once persistence lands, derive default goals from the driver's recent weak corners/mistakes instead of asking from scratch. *Depends on 6.2 + 6.3 above — no net new cross-team asks.*
 
-### Edge / Telemetry
+### Edge / Telemetry, AGY Pipeline, UX / Frontend
 
-**Hardware stack** (confirmed Apr 14 mentorship with Brian Luc):
-| Device | Rate | Interface | Data |
-|--------|------|-----------|------|
-| RaceBox Mini | 25Hz GPS + IMU | BLE 5.2 | lat, lon, speed, gLat, gLong, altitude |
-| OBDLink MX+ | 5-8Hz OBD-II | BT Classic 3.0 | throttle, brake, RPM, gear, coolant |
-| Pixel 10 | — | USB-C / BT | Runs the coaching PWA. On-device inference (Gemini Nano via Chrome Prompt API, or a Gemma model) is roadmap, not deployed today. |
+These pods own their own roadmaps and acceptance criteria. To avoid duplication, the canonical task list lives in [`docs/user-stories.md`](docs/user-stories.md): ET-1..6 (Edge / Telemetry — extend `streaming-telemetry-server` with merged OBD+RaceBox stream, pre-rendered MP3s, dual-BT test, time sync, resilient BT bridge), AGY-1..3 (AGY Pipeline — post-session schema, coaching-event ingestion, `DriverProfileStore` persistence backend), UX-1..5 (UX / Frontend — CoachPanel metadata, pre-race chat UI, PWA conversion, minimal in-car HUD, persona selection).
 
-**Team car:** 2024 Subaru GR86 (automatic, DauntlessOBD CAN) — Team 1 Beginner Pod.
-
-**Latency budget:** 300-500ms from event to audio. "Feedback 800ms late is worse than silence."
-
-- [x] **Hardware stack documented** — RaceBox Mini 25Hz, OBDLink MX+ 5-8Hz, Pixel 10 pipeline
-- [ ] **Extend `streaming-telemetry-server` to emit merged RaceBox+OBD stream** — Server already exposes SSE + CSV replay + CORS. Needed: emit the OBD/IMU channels already present in `SampleStream2024.csv` (throttle, brake, RPM, gear, gLat, gLong, steering), drive replay off source timestamps instead of fixed 10Hz `sleep()`, and separate rates (25Hz GPS/IMU, 5-8Hz OBD). Unblocks removing the virtual brake/throttle hack in `telemetryStreamService.ts`.
-- [ ] **Pre-rendered MP3s for safety-critical actions** — Audio clips for BRAKE, OVERSTEER_RECOVERY, COMMIT per persona
-- [ ] **Dual BT test** — Validate BLE 5.2 (RaceBox) + BT Classic 3.0 (OBDLink) simultaneous on Pixel 10
-- [ ] **Steering angle channel** — OBD PID if available on the GR86; otherwise IMU-derived estimate
-- [ ] **Time sync and OBD upsampling** — Cross-correlation calibration (hard throttle blip → RPM spike vs longitudinal G spike) aligns RaceBox GPS epoch with the browser's monotonic clock (expected 20-80ms offset). Upsample OBD (5-8Hz) to RaceBox rate (25Hz): linear interp for continuous channels, zero-order hold for discrete.
-- [ ] **Resilient BT bridge (PWA survives backgrounding)** — Pick an implementation path (Web Bluetooth for RaceBox + tethered companion process for OBDLink BT Classic, OR tethered process for both). PWA-level keep-alive with `navigator.wakeLock` + service worker; automatic reconnect on disconnect. See user story ET-6 for acceptance criteria.
-
-### AGY Pipeline
-
-- [ ] **Define post-session data schema** — Specify what format coaching events and lap metrics should be stored in (BigQuery, local JSON, or other) so the coaching engine can export session data for analysis and cross-session learning.
-- [ ] **Build ingestion for coaching events** — Receive per-corner metrics (brake point, apex speed, exit speed), mistake zones, and coaching decisions from each session. Enable post-session analysis and improvement tracking.
-- [ ] **Persistence layer for cross-session driver profile** — Implement `DriverProfileStore` interface (defined by Data Reasoning in `src/types.ts`). Storage backend (IndexedDB, localStorage, or cloud sync) that persists `DriverProfile` across sessions. Data Reasoning defines what to store; AGY Pipeline provides the how. See `DriverProfileStore` interface: `load()`, `save()`, `addSession()`.
-
-### UX / Frontend
-
-- [ ] **Update CoachPanel to show coaching metadata** — CoachPanel currently shows only `path` and `text`. Update to display priority badge (P0-P3), action name, and corner phase from `CoachingDecision`. This makes the Data Reasoning layer visible in the UI.
-- [ ] **Pre-race chat UI** — Build a pre-session goal-setting interface (form or conversational). Output: array of `SessionGoal` objects passed to `coachingService.setSessionGoals()`. See integration contract: `docs/pre-race-chat-contract.md`. Max 3 goals, beginner-focused.
-- [ ] **Convert to PWA** — Add service worker and manifest for offline support. The hot path and feedforward already run client-side; PWA ensures the UI loads without network at the track.
-- [ ] **Minimal HUD for track use** — Design a signal-light-only visual (green/yellow/red) for in-car use. The driver cannot look at a screen; audio is primary, but a peripheral color signal adds confirmation without distraction.
-- [ ] **Coach persona selection UX** — Evaluate whether mid-session coach switching is useful or distracting. Consider recommending a persona based on driver skill level from the driver model.
+The two integration cliffs that matter most for the May 23 field test are **UX-2 (pre-race chat → `setSessionGoals()`)** wired against [`docs/pre-race-chat-contract.md`](docs/pre-race-chat-contract.md), and **AGY-3 (`DriverProfileStore` backend)** implementing the interface in `koru-application/src/types.ts`.
 
 ### Future Work
 
-- [ ] **Cold path offline fallback** — Pre-compute a coaching lookup table for known tracks (keyed by corner + common mistakes) as offline replacement for Gemini cold path. Evaluate on-device Gemma 4 on Pixel 10 as an upgrade over Gemini Nano.
-- [ ] **Track auto-detection** — Detect corners on unknown tracks from heading change rate alone, without pre-loaded track data. Enables track-agnostic coaching for any track day.
-- [ ] **Corner-specific coaching** — Integrate real coach knowledge (T-Rod session notes, Ross Bentley curriculum) into feedforward path for known tracks. For unknown tracks, determine whether telemetry-only analysis is sufficient or human coaching input is required.
-- [ ] **Two-way conversational dialog** — Enable real-time back-and-forth between the driver and the AI coach. This is the pinnacle for advanced drivers, where coaching becomes a discussion about minute nuances, setup adjustments, and driving strategy rather than one-way instructions.
-- [ ] **Native Android app** — Move from PWA to a native Android application on the Pixel 10. Native access to Bluetooth/USB for direct hardware communication, background audio, and on-device Gemma 4 inference without browser limitations.
+Roadmap-level exploration items, not gated on the May 23 field test: cold-path offline fallback (pre-computed lookup tables, on-device Gemma evaluation), track auto-detection from heading-change rate, corner-specific coaching for unknown tracks, two-way conversational dialog for advanced drivers, and a possible native Android app. Tracked as roadmap notes only — no acceptance criteria or owners assigned yet.
 
 ---
 
@@ -258,13 +215,9 @@ All teams share a common compute and sensor platform. Car-specific adapters vary
 | **RaceBox Mini** | 25Hz GPS + IMU (position, speed, heading, lateral/longitudinal G) | BLE 5.2 | 25 Hz, 7.5-15ms latency |
 | **OBDLink MX+** | Standard OBD-II adapter (RPM, speed, pedal position, coolant temp) | Bluetooth Classic 3.0 | 5-8 Hz effective |
 
-### Team Cars (reference only — active work is Team 1)
+### Team Car
 
-| Team | Car | OBD Path | Notes |
-|------|-----|----------|-------|
-| **Team 1 (Beginner)** | 2024 Subaru GR86 (automatic) | DauntlessOBD Enhanced + Hachi ASC CAN | Full CAN access, 100-500 kbps |
-| **Team 2 (Intermediate)** | BMW E46 M3 (MSS54HP) | OBDLink MX+ K-Line (Path A) or CANable 2.0 direct CAN (Path B) | K-Line limited to 10.4 kbaud, 9 channels |
-| **Team 3 (Pro)** | Honda S2000 AP2 | MoTec system (separate sync) | Pro data unit handled by T-Rod |
+Active work targets **Team 1 (Beginner Pod): 2024 Subaru GR86 (automatic, DauntlessOBD Enhanced + Hachi ASC CAN, full CAN access at 100–500 kbps)**. Team 2 (BMW E46 M3) and Team 3 (Honda S2000 AP2) are separate pods with their own hardware paths; not in scope for this repo.
 
 ### Data Channel Tiers
 
@@ -423,46 +376,7 @@ The hot path and feedforward path work without an API key.
 
 ## streaming-telemetry-server
 
-Python FastAPI service that streams GPS telemetry over Server-Sent Events (SSE).
-
-```
-streaming-telemetry-server/
-  ingest.py              # FastAPI app: SSE broadcast, mock generator, serial reader, NMEA parser
-  requirements.txt       # fastapi, uvicorn, sse-starlette, pyserial, pynmea2
-  SampleStream2024.csv   # Sonoma Raceway sample data (VBOX format)
-  test_nmea_parsing.py   # NMEA parsing tests
-  Procfile               # Heroku/Railway deployment
-```
-
-### How it works
-
-```
- ┌────────────────┐         ┌──────────────┐         ┌──────────┐
- │ Data Source     │         │   ingest.py  │   SSE   │ Clients  │
- │                 │         │              │ /events │          │
- │ --mock:         │────────►│  Broadcaster │────────►│ Browser  │
- │   CSV at 10Hz   │         │  (pub/sub)   │         │ koru-app │
- │                 │         │              │         │          │
- │ --port:         │────────►│  NMEA Parser │────────►│ Any SSE  │
- │   Serial GPS    │         │  or Binary   │         │ client   │
- └────────────────┘         └──────────────┘         └──────────┘
-```
-
-**Modes:**
-- `--mock` — Replays `SampleStream2024.csv` as GPSD TPV objects at 10Hz. No hardware needed.
-- `--port /dev/ttyXXX --baud 9600` — Reads NMEA sentences from serial GPS (VK-162 tested).
-- `--binary` — Experimental binary protocol mode for VBox devices.
-
-**Endpoints:**
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/events` | GET | SSE stream of GPS data (TPV JSON objects) |
-| `/state` | GET | Current mock mode status |
-| `/mock` | POST | Enable/disable mock data `{"enabled": true}` |
-
-**Environment variables** (`.env`):
-- `PORT` — Server port (default: 8000)
-- `HOST` — Bind address (default: 0.0.0.0)
+Python FastAPI service that streams GPS telemetry over Server-Sent Events (SSE) at `localhost:8000/events`. Supports CSV replay (`--mock`, default 10 Hz), serial NMEA (`--port`), and an experimental binary mode for VBox devices. The full endpoint reference, modes, and env vars live in [`streaming-telemetry-server/`](streaming-telemetry-server/) — this server is owned by the Edge / Telemetry pod; extending it to emit merged RaceBox + OBD channels is tracked as user-story ET-1.
 
 ---
 
