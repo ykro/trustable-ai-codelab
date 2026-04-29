@@ -139,12 +139,34 @@ def load_track_data(filepath: str):
                     lon = parse_vbox_coord(row["Longitude"])
                     speed_kmh = float(row["Speed (km/h)"] or 0)
                     heading = float(row["Heading (Degrees)"] or 0)
+                    elapsed_time = float(row.get("Elapsed time (s)", 0) or 0)
+                    
+                    # ET-1 & ET-4 Extra Fields
+                    gLat = float(row.get("Lateral acceleration (g)", 0) or 0)
+                    gLong = float(row.get("Longitudinal acceleration (g)", 0) or 0)
+                    throttle = float(row.get("Throttle Position (%)", 0) or 0)
+                    brake = float(row.get("Brake Position (%)", 0) or 0)
+                    rpm = float(row.get("Engine Speed (rpm)", 0) or 0)
+                    steering = float(row.get("Steering Angle (Degrees)", 0) or 0)
+                    try:
+                        gear_val = int(row.get("Gear ((null))", 0) or 0)
+                        gear = 0 if gear_val == 255 else gear_val
+                    except Exception:
+                        gear = 0
                     
                     data.append({
+                        "time": elapsed_time,
                         "lat": lat,
                         "lon": lon,
                         "speed_kmh": speed_kmh,
-                        "heading": heading
+                        "heading": heading,
+                        "gLat": gLat,
+                        "gLong": gLong,
+                        "throttle": throttle,
+                        "brake": brake,
+                        "rpm": rpm,
+                        "gear": gear,
+                        "steering": steering
                     })
                     count += 1
                 except (ValueError, KeyError) as e:
@@ -177,38 +199,86 @@ async def update_mock_state(update: MockUpdate):
         
     return {"status": "ok", "mock_enabled": mock_settings["enabled"]}
 
-async def mock_gps_generator(mode: str = "nmea"):
-    """Generates mock GPS data from VBOX CSV."""
-    logger.info(f"Starting Mock GPS Generator in {mode} mode")
+async def mock_gps_generator(mode: str = "nmea", rate: float = 1.0):
+    """Generates mock GPS data from VBOX CSV with interpolation and rate splitting."""
+    logger.info(f"Starting Mock GPS Generator in {mode} mode at {rate}x speed")
     
     # Load data once
     mock_settings["track_data"] = load_track_data("SampleStream2024.csv")
     
     if not mock_settings["track_data"]:
         logger.warning("No track data loaded. Falling back to static point.")
-        mock_settings["track_data"] = [{"lat": 37.7749, "lon": -122.4194, "speed_kmh": 0, "heading": 0}]
+        fallback = {"time": 0.0, "lat": 37.7749, "lon": -122.4194, "speed_kmh": 0, "heading": 0, "gLat": 0, "gLong": 0, "throttle": 0, "brake": 0, "rpm": 0, "gear": 0, "steering": 0}
+        mock_settings["track_data"] = [fallback]
 
+    track_data = mock_settings["track_data"]
+    total_time = track_data[-1]["time"] if len(track_data) > 0 else 0
+    sim_time = track_data[0].get("time", 0.0)
+    last_obd_time = -1.0
+    last_obd_data = {}
+    
+    TICK_RATE = 25.0
+    TICK_DUR = 1.0 / TICK_RATE
+    OBD_RATE = 6.0 # 5-8 Hz
+    OBD_DUR = 1.0 / OBD_RATE
+    
+    idx = 0
+    
     while True:
         if not mock_settings["enabled"]:
             await asyncio.sleep(0.5)
             continue
-
-        # Get current state from list
-        idx = mock_settings["track_index"]
-        track_data = mock_settings["track_data"]
         
-        # Wrap around
-        if idx >= len(track_data):
+        sim_time += TICK_DUR * rate
+        
+        # Loop animation checking
+        if sim_time > total_time:
+            sim_time = track_data[0].get("time", 0.0)
             idx = 0
-            mock_settings["track_index"] = 0
+            last_obd_time = -1.0
             
-        point = track_data[idx]
+        # Find bracketing indices
+        while idx < len(track_data) - 1 and track_data[idx+1]["time"] < sim_time:
+            idx += 1
+            
+        p1 = track_data[idx]
+        p2 = track_data[idx + 1] if idx + 1 < len(track_data) else p1
         
-        # Advance index for next tick
-        mock_settings["track_index"] = idx + 1
+        dt = p2["time"] - p1["time"]
+        if dt > 0:
+            ratio = (sim_time - p1["time"]) / dt
+        else:
+            ratio = 0.0
+            
+        # Interpolate GPS/IMU at 25Hz
+        def lerp(a, b, r): return a + (b - a) * r
+        interp_lat = lerp(p1["lat"], p2["lat"], ratio)
+        interp_lon = lerp(p1["lon"], p2["lon"], ratio)
+        interp_speed = lerp(p1["speed_kmh"], p2["speed_kmh"], ratio) / 3.6
+        # Quick heading handle over boundary
+        h1, h2 = p1["heading"], p2["heading"]
+        if abs(h2 - h1) > 180:
+             if h1 < h2: h1 += 360
+             else: h2 += 360
+        interp_track = lerp(h1, h2, ratio) % 360
+        interp_gLat = lerp(p1["gLat"], p2["gLat"], ratio)
+        interp_gLong = lerp(p1["gLong"], p2["gLong"], ratio)
+        
+        # Zero-order hold mapping for OBD at ~6Hz
+        if sim_time - last_obd_time >= OBD_DUR * rate:
+            last_obd_time = sim_time
+            # Pick nearest point for OBD values instead of interpolating strings/discrete values
+            nearest = p2 if ratio > 0.5 else p1
+            last_obd_data = {
+                "throttle": nearest["throttle"],
+                "brake": nearest["brake"],
+                "rpm": nearest["rpm"],
+                "gear": nearest["gear"],
+                "steering": nearest["steering"]
+            }
 
         if mode == "binary":
-            # Mock binary data (just random bytes for now)
+            # Mock binary data
             dummy_bytes = random.randbytes(16)
             data = json.dumps({
                "class": "BINARY",
@@ -216,29 +286,35 @@ async def mock_gps_generator(mode: str = "nmea"):
                "device": "/dev/mock"
             })
         else:
-             speed_ms = point["speed_kmh"] / 3.6
              current_time = datetime.now(timezone.utc).isoformat()
              
-             # GPSD TPV Object
+             # GPSD TPV Object expanded with extra telemetry fields
              tpv = {
                 "class": "TPV",
                 "device": "/dev/mock",
                 "mode": 3,
                 "time": current_time,
-                "lat": point["lat"],
-                "lon": point["lon"],
+                "lat": interp_lat,
+                "lon": interp_lon,
                 "alt": 0,
-                "speed": speed_ms,
-                "track": point["heading"],
+                "speed": interp_speed,
+                "track": interp_track,
                 "climb": 0,
                 "epx": 0.5,
                 "epy": 0.5,
-                "epv": 1.0
+                "epv": 1.0,
+                "gLat": interp_gLat,
+                "gLong": interp_gLong,
+                "throttle": last_obd_data.get("throttle", 0),
+                "brake": last_obd_data.get("brake", 0),
+                "rpm": last_obd_data.get("rpm", 0),
+                "gear": last_obd_data.get("gear", 0),
+                "steering": last_obd_data.get("steering", 0)
             }
              data = json.dumps(tpv)
         
         await broadcast_data(data)
-        await asyncio.sleep(0.1) # 10Hz
+        await asyncio.sleep(TICK_DUR) # 25Hz target update
 
 import pynmea2
 
@@ -327,6 +403,7 @@ if __name__ == "__main__":
     parser.add_argument("--binary", action="store_true", help="Enable binary protocol mode")
     parser.add_argument("--port", type=str, default="/dev/ttyUSB0", help="Serial port")
     parser.add_argument("--baud", type=int, default=115200, help="Baud rate")
+    parser.add_argument("--rate", type=float, default=1.0, help="Playback speed multiplier for mock mode")
     
     args = parser.parse_args()
     
@@ -343,7 +420,7 @@ if __name__ == "__main__":
     async def startup_event():
         if args.mock:
             mode = "binary" if args.binary else "nmea"
-            asyncio.create_task(mock_gps_generator(mode))
+            asyncio.create_task(mock_gps_generator(mode, args.rate))
         else:
             asyncio.create_task(serial_reader(args.port, args.baud, args.binary))
     
