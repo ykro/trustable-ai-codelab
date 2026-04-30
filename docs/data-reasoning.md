@@ -83,6 +83,65 @@ Priority queue for coaching messages:
 - Messages expire after 3 seconds (stale)
 - P0 `preempt()` clears all non-safety messages and delivers immediately
 
+### P0 Safety Bypass — parameters and guarantees
+
+DR-2 contract from the April 29 review: *the HOT path can independently fire
+critical alerts even when the COLD path (Gemini) hangs or crashes, without
+waiting for any thread lock.*
+
+**Exact triggers that emit P0** (source: `ACTION_PRIORITY` in
+`coachingService.ts` and `DECISION_MATRIX` in `utils/coachingKnowledge.ts`):
+
+| Action | Hot rule (decisionMatrix) | Notes |
+|--------|---------------------------|-------|
+| `OVERSTEER_RECOVERY` | `\|gLat\| > 0.7 && gLong < -0.3 && throttle < 5 && speed > 40` | Loss of rear grip during decel. Implemented today. |
+| `BRAKE` | Reserved P0 slot — currently emitted via humanization for the BRAKE action; no decision-matrix rule yet. Future feedforward "Brake Now!" alerts (DR-1 / DR-5) will route through this slot. |
+
+`COGNITIVE_OVERLOAD` is P2 and is gated by 10s cadence; it is **not** a safety
+bypass, despite being a driver-state alert.
+
+**Bypass behavior** (load-bearing properties — verified in
+`coachingService.p0Stress.test.ts`):
+
+1. **Skips TimingGate blackout** — `TimingGate.canDeliver(0)` returns `true`
+   unconditionally; `runHotPath` calls `emit()` directly for `priority === 0`,
+   which routes through `coachingQueue.preempt()` rather than `enqueue` +
+   `dequeue`. Mid-corner / apex blackout does not stop a P0.
+2. **Preempts CoachingQueue** — `preempt()` filters the queue down to existing
+   P0 entries and returns the new decision for immediate delivery. Pending
+   P1/P2/P3 messages are dropped.
+3. **No humanization budget enforcement** — `humanizeAction()` is called
+   inline; there is no async path between rule match and listener emit.
+4. **No cold-path dependency** — `runColdPath` is invoked via `void` *after*
+   the hot path has already executed, so its `await fetch(...)` cannot block
+   any prior P0 delivery. The cold path's cooldown (`lastColdTime`) is set
+   *before* the await, so an in-flight hung request does not pile up
+   additional fetches.
+5. **Goal boost cannot demote a non-P0 to P0** — `boostForGoals` returns
+   early when `base === 0` and floors goal-boosted priorities at 1, so a
+   tactical message can never accidentally bypass the gate.
+
+**Failure modes that do NOT affect P0 delivery:**
+
+| Cold-path fault | Tested in p0Stress | Effect on P0 |
+|-----------------|--------------------|--------------|
+| `fetch` returns Promise that never resolves (Gemini wedge) | yes | none — P0 still emitted, hot-path latency unaffected |
+| `fetch` throws synchronously (programmer error / null deref) | yes | none — caught by cold path's `try/catch`; hot path is upstream |
+| `fetch` resolves slowly (5s+ — degraded network) | yes | none — `void`-dispatched, hot path returns first |
+| Network down / offline at the track | implicit (`fetch` rejects) | none — same path as the throw case |
+| No API key configured | yes (control case) | cold path short-circuits; hot path unchanged |
+
+**Latency budget:** the HOT path's documented budget is < 50ms per frame
+(`coachingService.latency.test.ts` measures p99 < 15ms in practice). The P0
+stress tests assert a < 100ms wall-clock bound under fault injection, loose
+enough to absorb CI variance but tight enough that any regression that made
+the hot path actually `await` the cold path would break it immediately.
+
+**Test file:** `src/services/__tests__/coachingService.p0Stress.test.ts` —
+seven cases covering each fault mode (hang, sync throw, slow resolve,
+success), the bypass contract under TimingGate BLACKOUT, the no-cold-path
+control, and repeated P0s with a hung cold path.
+
 ### Driver Model
 
 **File:** `src/services/driverModel.ts`
