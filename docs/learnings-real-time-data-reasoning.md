@@ -312,3 +312,94 @@ A cross-session runner profile that tracks these patterns becomes the most valua
 
 *Adrian Catalan — April 2026*
 *Built during the GDE Trustable AI Field Test project*
+
+---
+
+## Appendix A — April 29 Review Feedback (and what it taught us)
+
+The April 29 architecture review came back **CONDITIONAL PASS** with three categories of feedback. The portable lessons are below; the team-specific action items live in the README and `user-stories.md` (DR-1..7).
+
+### The geofence is a *time* budget, not a *distance* budget
+
+The reviewer's sharpest observation: a static 150m FEEDFORWARD trigger sounds "safe" until you compose it with a 1.5s TTS budget at 100 mph. The driver gets 1.8 seconds of cognition before the braking zone — far too short. The fix is to express the trigger as a *time-to-event* budget that scales with velocity, not a fixed distance.
+
+**Portable lesson:** Any anticipatory system whose output goes through a non-trivial delivery channel (TTS, screen render, haptic ramp) needs to budget that channel's latency *upstream* of the trigger. The trigger distance is a derivative of `velocity × (delivery_latency + cognitive_headroom)`. This applies equally to a delivery drone (approach-warning before a tight pass) and a manufacturing line (pre-stage alert before a transition).
+
+### "Why" beats "what" once you have physics context
+
+Drivers usually know *what* they did wrong (missed the apex, locked the rears). They don't always know *why*. The COLD path's value isn't restating the symptom — it's pulling the physics chain that produced the symptom: weight transfer, friction-circle position, brake-release rate.
+
+**Portable lesson:** The interesting use of LLM-in-the-loop is causal explanation, not symptom paraphrasing. Wherever you have rich numerical context that the human doesn't see directly (telemetry, vitals, machine state), use the LLM to *reason from that context backwards to a root cause*. This generalizes to clinical decision support ("the lab trend that produced this alert"), industrial fault analysis, and pilot debriefing.
+
+### Coach the eyes, not just the hands
+
+A point Ross Bentley raised in mentorship and the reviewer reinforced: at speed, the lever that most affects outcomes is *where the operator is looking*. Telling a driver to brake earlier helps once. Telling them where to look for the brake reference fixes it permanently.
+
+**Portable lesson:** In any high-rate-of-change domain (driving, surgery, pilot, sport), perception and gaze direction are usually upstream of motor action. A coaching system that only addresses the motor action chases symptoms. Modeling the perceptual reference (visual cue, attention target) as a first-class coaching output unlocks a category of advice that the heuristic layer alone cannot produce.
+
+### Authority overrides rapport under safety pressure
+
+Persona-level humanization builds trust over a session. Under emergency conditions it actively hurts. A spin at 90 mph requires "Both feet in!" — sharp, terse, authoritative. Polite phrasing becomes *latency in the cognitive channel*: the driver has to parse meaning before they can act.
+
+**Portable lesson:** Voice or text humanization is itself a budget item under safety pressure. A coaching system needs an explicit override predicate ("are we in a P0/safety-override state?") that bypasses persona inflection and falls back to terse imperative output. This is not a UX choice — it's a latency-correctness choice.
+
+### Forced-fault tests are not optional for split-brain systems
+
+The reviewer's implicit point on P0: an architectural safeguard you can't *demonstrate* under fault is not a safeguard. The split-brain pattern is only credible when you have explicit tests that hang the COLD path (or its dependency, like the network) and prove the HOT path keeps emitting safety alerts within budget.
+
+**Portable lesson:** Any system with a fast/slow split needs a forced-fault test surface. "The fast path doesn't depend on the slow path" is a claim until proven by injecting a `Promise<never>` into the slow path and watching the fast path stay green.
+
+---
+
+## Appendix B — Cross-team progress (April 29 snapshot)
+
+This appendix records what the other Team 1 pods landed leading up to the April 29 gate. Captured here because the *interactions* between data reasoning and the other layers are themselves a portable learning, and because future sessions tend to forget which pod owned which decision.
+
+### Edge / Telemetry — Madona Wambua
+
+**What landed:** `streaming-telemetry-server` extended (branch `edge-telemtry`, merged into `rabimba/main`) to emit the OBD + IMU channels that already lived in `SampleStream2024.csv`. Specifically:
+
+- 25Hz GPS/IMU output with linear interpolation between source samples (`gLat`, `gLong` smoothed across the 25Hz tick rate).
+- Zero-order-hold OBD output at ~6Hz (`throttle`, `brake`, `rpm`, `gear`, `steering`) — matching the realistic OBD-II refresh rate without re-emitting interpolated discrete-state values that would be physically wrong.
+- A `--rate` flag for playback speed control (1.0× realtime by default).
+- The PWA-side workaround in `telemetryStreamService.ts` that synthesized brake/throttle from longitudinal G-force was removed.
+
+**Portable lesson:** When you mock a real-time data source, *don't pick a uniform rate for everything*. Different physical signals (GPS, IMU, OBD-II, vision) have different real-world refresh rates and different correct interpolation strategies (lerp vs. zero-order hold vs. nearest-neighbor). Collapsing them to one rate hides bugs that only show up when real hardware joins the loop.
+
+### UX / On-device runtime — Rabimba Karanjai
+
+**What landed (branch `rabimba/koru-od`, parallel track to `main`):** A native Android shell wrapping the existing PWA, with on-device reasoning lanes:
+
+- WebView wrapper + JS bridge between the PWA and native runtime (`KoruJsBridge.kt`, `BridgePayloads.kt`).
+- CameraX vision lane — a separate analyzer (`CameraLaneAnalyzer.kt`) that produces vision features (`VisionFeatureStore.kt`) merged into the telemetry frame as a `vision` snapshot. The PWA-side `liveBackendAdapter.ts` and `androidBridge.ts` consume them.
+- On-device reasoners with progressive fallback: `AiCoreReasoner` (Gemini Nano via AICore) → `LiteRtLmReasoner` (LiteRT runtime) → `DeterministicOnlyReasoner` (heuristic-only). Selection happens at runtime based on device capability — `ModelAssetManager.kt` stages the right model artifact.
+- IMU/GPS sensor fusion *from the phone itself* as a default telemetry source — useful when the BLE/BT-Classic path to RaceBox/OBDLink hasn't connected yet, or as a "trackless" lane for camera-direct testing.
+- A camera-direct session controller that lets the system run on visual features alone, recording a session for later replay (`recordedSessionStore.ts`).
+
+**Why this matters as a learning** (independent of whether it ends up in the May 23 build):
+
+- **The split-brain pattern survives the move from PWA to native.** HOT/COLD/FEEDFORWARD didn't have to be re-architected when the runtime moved closer to the metal. The reasoner abstraction (`OnDeviceReasoner`) is the only seam that needed to exist — once it was there, swapping AICore for LiteRt or for pure-heuristic was a configuration choice, not a refactor.
+- **Vision is just another sensor on the bus.** Adding a CameraX analyzer didn't require a special "vision mode" — it produced a feature dictionary that joined the telemetry frame, and the existing decision matrix consumed it like any other channel. This validates the generic-time-series-channel point AGY-1 will eventually have to enforce (see Appendix A and `user-stories.md` AGY-1).
+- **On-device reasoning is a degraded-mode story, not a separate product.** The progressive fallback (AICore → LiteRt → deterministic) is the same pattern the data-reasoning layer already uses for COLD failure (full Gemini → cached lookup → heuristic-only). The portable lesson: design the *fallback chain* once; it pays off in every layer.
+
+### What this looks like as a generalized stack
+
+```
+SENSORS (any rate, any modality)
+   ↓ (interpolation strategy chosen per-signal — Madona's lesson)
+TIME-SERIES CHANNEL BUS (generic envelope — Appendix A AGY-1 lesson)
+   ↓
+HOT PATH (heuristic, <50ms)         ←———  P0 safety override (Appendix A)
+   ↓                                       │
+HUMANIZATION (with budget + override)  ────┘
+   ↓
+DELIVERY (TTS / display / haptic)   ←——  geofence-by-time-budget (Appendix A)
+   ↑
+COLD PATH (LLM, "why" not "what" — Appendix A)
+   ↑
+FALLBACK CHAIN (AICore → LiteRt → heuristic-only — Rabimba's lesson)
+```
+
+That picture didn't exist on April 1. The April 29 review surfaced it.
+
+

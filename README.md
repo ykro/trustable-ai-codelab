@@ -127,7 +127,7 @@ The hard technical gate is two days out. These are the areas where outside revie
 3. **Driver model.** Smoothness + coasting are coarse proxies. The 10s window + 5s hysteresis + re-promotion guard keep the classification stable, but the underlying signals haven't been validated against actual coach assessments. Reviewer feedback on whether this is a reasonable v1 versus a placeholder would be useful.
 4. **Offline behavior.** Cold path resets `lastColdTime = 0` on fetch failure so the next frame can retry. HOT + FEEDFORWARD work without network. Worth confirming the offline contract is clear enough for the May 23 Sonoma field test.
 5. **Coaching content / Domain Expertise Layer.** `humanizeAction` covers 5 personas × ~20 actions × 3 skill levels — a lot of strings. The BEGINNER set is derived from Ross Bentley pedagogy and the T-Rod Sonoma session, and every threshold in `DECISION_MATRIX` is sourced. The [Domain Expertise Layer](#domain-expertise-layer) section documents the provenance map. A spot-check of any coaching line against its cited source would be useful.
-6. **Cross-team contracts.** Phase 6.2 depends on UX (Rabimba) — see [`docs/pre-race-chat-contract.md`](docs/pre-race-chat-contract.md). Phase 6.3 depends on AGY Pipeline (Mike) — `DriverProfileStore` interface in [`types.ts`](koru-application/src/types.ts). Useful for reviewers to sanity-check whether these contracts are enough for the downstream pods to start.
+6. **Cross-team contracts.** Phase 6.2 depends on UX (Rabimba) — see [`docs/pre-race-chat-contract.md`](docs/pre-race-chat-contract.md). Phase 6.3 depends on AGY Pipeline (Mike + Austin) — `DriverProfileStore` interface in [`types.ts`](koru-application/src/types.ts). Useful for reviewers to sanity-check whether these contracts are enough for the downstream pods to start.
 7. **Test coverage.** 81 unit + integration tests with regressions for every blocker fix, plus the new latency benchmark. Acknowledged gaps: no soak test for queue under burst input; no end-to-end test of cold-path retry on the actual Gemini endpoint. Flagging in case either is needed before the field test.
 
 ### Telemetry capability matrix (degraded modes)
@@ -147,6 +147,34 @@ If BT Classic on the OBDLink MX+ doesn't reach the PWA in time for May 23, the s
 | Session goals | No | 1–3 focus areas bias hot-path priority |
 | Improvement tracking | Lap times only | Per-corner deltas, lap-over-lap encouragement |
 | Offline | Yes | Yes for HOT + FEEDFORWARD; COLD requires network (degrades silently to HOT-only) |
+
+---
+
+## Post-Gate Feedback (April 29 review)
+
+The Googler review returned **CONDITIONAL PASS**, with three categories of follow-up before Sonoma. Items below have testable user-story versions in [`docs/user-stories.md`](docs/user-stories.md) (DR-1..7 for Data Reasoning, plus updates to AGY-1..3 and UX-2 for the long-term framework asks).
+
+### Field-test blockers (must close before May 23)
+
+- **DR-1 — Dynamic FEEDFORWARD geofence.** The 150m static trigger leaves only ~1.8s of cognitive headroom at 100 mph after a 1.5s TTS budget. Replace with a velocity-scaled trigger that targets a fixed time-to-event (≥3.0s default).
+- **DR-2 — P0 stress test + documented bypass parameters.** Forced-fault simulator that hangs/crashes the COLD path; verify HOT still emits P0 alerts within budget. Document exactly what triggers P0.
+- **DR-3 — HOT-path humanization ≤50ms.** Add an assertion to the existing latency benchmark; fall back to raw robotic command if humanization budget is exceeded.
+
+### Pedagogical tuning
+
+- **DR-4 — "Why over What" in COLD.** Restructure Gemini prompts so post-corner analysis explains root cause (brake release abruptness, weight transfer) instead of restating the symptom.
+- **DR-5 — Eyes-up coaching in FEEDFORWARD.** Before high-speed corners (Sonoma T10 in particular), prompts coach driver vision ("Eyes up, look for the bridge tire mark") in addition to pedal/wheel guidance.
+- **DR-6 — Safety override of humanization.** Under high-slip / high-speed-braking conditions, drop conversational humanization. A spin at 90 mph requires authoritative "Both feet in!" — not a polite suggestion.
+
+### Long-term framework extensibility (post-Sonoma)
+
+- **DR-7 — Abstract geofence triggers.** Decouple FEEDFORWARD from track-coordinate triggers; expose a generic temporal/spatial event source so the same engine can drive a delivery drone or an assembly-line stage. (Pattern already documented in [`docs/learnings-real-time-data-reasoning.md`](docs/learnings-real-time-data-reasoning.md).)
+- **AGY (revised) — Generic time-series schema.** AGY-1's storage schema must accept generic JSON time-series sensor payloads, not be hardcoded to `RPM/throttle/brake`. Owners: **Mike Wolfson + Austin**.
+- **UX (revised) — Generic Session Initialization module.** UX-2's pre-race chat must be loadable as a "Session Initialization" component with a domain-agnostic API contract for driver/operator preferences. Owner: **Rabimba Karanjai**.
+
+### What the reviewer flagged as portable today (no action — recognition)
+
+The HOT/COLD/FEEDFORWARD tri-path routing engine, the P0 Safety Bypass mechanism, and the latency-budget monitoring pattern were called out as "gold-standard patterns for any edge-AI system." These are reflected in [`docs/learnings-real-time-data-reasoning.md`](docs/learnings-real-time-data-reasoning.md) for cross-industry portability.
 
 ---
 
@@ -186,10 +214,22 @@ See [`docs/data-reasoning.md`](docs/data-reasoning.md) for detailed feature docu
   - *Needs from UX (Rabimba):* A pre-race chat screen that collects 1–3 goals, serializes them to the `SessionGoal[]` shape in [`docs/pre-race-chat-contract.md`](docs/pre-race-chat-contract.md), and calls `coachingService.setSessionGoals(goals)` before the live session starts.
   - *Needs from data-reasoning (after UX lands):* emit P3 encouragement when the associated `PerformanceTracker` metric improves.
 - [x] **6.3 Cross-Session Driver Profile** — `DriverProfile` + `DriverProfileStore` interfaces defined. Tracks skill level, problem corners, strengths/weaknesses across sessions.
-  - *Needs from AGY Pipeline (Mike):* (a) define the storage schema covering `DriverProfile` fields (skill level history, weak corners by track, goal completion counts), (b) expose endpoints / a client SDK that satisfies the `DriverProfileStore` interface in `types.ts`, and (c) a write hook at session end to flush `PerformanceTracker.getCornerHistories()` into the profile. Tracked as AGY-1 / AGY-2 in `docs/user-stories.md`.
+  - *Needs from AGY Pipeline (Mike + Austin):* (a) define the storage schema covering `DriverProfile` fields (skill level history, weak corners by track, goal completion counts) **as a generic time-series-sensor schema, not hardcoded to car telemetry — see April 29 feedback**, (b) expose endpoints / a client SDK that satisfies the `DriverProfileStore` interface in `types.ts`, and (c) a write hook at session end to flush `PerformanceTracker.getCornerHistories()` into the profile. Tracked as AGY-1 / AGY-2 in `docs/user-stories.md`.
   - *Needs from data-reasoning (after AGY lands):* swap the in-memory stub for the real store, add a session-boundary flush call, add regression tests against a fake store.
 - [x] **6.4 In-Session Improvement Tracking** — `PerformanceTracker` tracks per-corner metrics (min speed, brake point, throttle %, corner name) within a session. Lap-over-lap delta emits P3 encouragement on improvement. Cross-session trends require persistence layer (Phase 6.3).
 - [ ] **Auto-generation of session goals from DriverProfile** — Once persistence lands, derive default goals from the driver's recent weak corners/mistakes instead of asking from scratch. *Depends on 6.2 + 6.3 above — no net new cross-team asks.*
+
+**Phase 7: April 29 Feedback (in progress on `data-reasoning`)**
+
+Closing items raised in the conditional-pass review. Detailed acceptance criteria in [`docs/user-stories.md`](docs/user-stories.md) (DR-1..7).
+
+- [ ] **DR-1** — Dynamic FEEDFORWARD geofence (velocity-scaled, time-to-event budget)
+- [ ] **DR-2** — P0 stress test + documented bypass parameters
+- [ ] **DR-3** — HOT-path humanization ≤50ms with raw-command fallback
+- [ ] **DR-4** — "Why over What" prompt restructuring in COLD
+- [ ] **DR-5** — Eyes-up vision coaching in FEEDFORWARD
+- [ ] **DR-6** — Humanization safety override under high-slip / high-speed braking
+- [ ] **DR-7** — Abstract geofence triggers for cross-domain portability *(post-Sonoma, not gating field test)*
 
 ### Edge / Telemetry, AGY Pipeline, UX / Frontend
 

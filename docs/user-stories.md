@@ -2,7 +2,7 @@
 
 Companion to the [Roadmap in the README](../README.md#roadmap). This document translates the TODOs for the **Edge/Telemetry**, **AGY Pipeline**, and **UX/Frontend** tracks into user stories with acceptance criteria, so each team can pick up an item and know what "done" looks like.
 
-**Scope:** This file covers work owned by teams *other than* Data Reasoning. For Data Reasoning stories, the work is tracked directly in `docs/data-reasoning.md` on the `data-reasoning` branch. *Future Work* items in the README are intentionally out of scope here — they are exploratory and will get stories once they become committed work.
+**Scope:** This file covers cross-team work items. Data Reasoning stories live in `docs/data-reasoning.md` on the `data-reasoning` branch — *except* the post-gate items DR-1..7 from the April 29 review, which are duplicated below so the whole team has a single readable list of follow-ups before Sonoma. *Future Work* items in the README are intentionally out of scope here — they are exploratory and will get stories once they become committed work.
 
 **Platform assumption:** The coaching app is a **Progressive Web App** running in the browser on a Pixel 10 (Vite + React, becoming a full PWA per UX-3). There is no native Android app today. Stories that touch Bluetooth, USB, or background execution use browser-level APIs (Web Bluetooth, WebUSB, Service Worker, Wake Lock) or a tethered companion process — **not** Android `Service` primitives.
 
@@ -18,13 +18,133 @@ Companion to the [Roadmap in the README](../README.md#roadmap). This document tr
 
 ## Table of Contents
 
+- [Data Reasoning — April 29 feedback (DR-1..7)](#data-reasoning--april-29-feedback)
 - [Edge / Telemetry](#edge--telemetry)
 - [AGY Pipeline](#agy-pipeline)
 - [UX / Frontend](#ux--frontend)
 
 ---
 
-## Edge / Telemetry
+## Data Reasoning — April 29 feedback
+
+These stories close the conditional-pass items raised by the Googler review on April 29. DR-1..3 are field-test blockers for May 23. DR-4..6 are pedagogical refinements requested in the same review. DR-7 is a post-Sonoma framework refactor.
+
+**Owner for all DR-* stories: Adrian Catalan.** Implementation lands on the `data-reasoning` branch.
+
+### DR-1 — Dynamic FEEDFORWARD geofence
+
+**As a** beginner driver approaching a corner at 100 mph,
+**I want** the FEEDFORWARD path to fire far enough ahead that I have at least 3 seconds of cognitive headroom after TTS finishes,
+**so that** I can actually act on the instruction before the braking zone instead of being told what to do *during* the brake event.
+
+**Acceptance criteria:**
+- Trigger distance is computed from instantaneous velocity and a configurable `feedforwardLeadSeconds` (default 3.0s) plus the TTS budget (default 1.5s) — total ≥4.5s of distance ahead of the corner.
+- At 30 mph the trigger is shorter (≈60m); at 100 mph the trigger is longer (≈200m). Static 150m geofence is removed.
+- Tests assert: low-speed (30 mph), medium (60 mph), high (100 mph) all produce the expected lead time within ±10%.
+- Zero or near-zero velocity (pit, parked) does not fire FEEDFORWARD.
+- Documented in `docs/data-reasoning.md` under FEEDFORWARD path.
+
+**Dependencies:** None. Self-contained on `data-reasoning`.
+
+---
+
+### DR-2 — P0 stress test + documented bypass parameters
+
+**As a** safety-aware reviewer,
+**I want** documented, tested guarantees that the P0 safety bypass keeps firing even when the COLD path (Gemini) hangs or crashes,
+**so that** I can trust the framework at 100 mph when the network or LLM service is degraded.
+
+**Acceptance criteria:**
+- A forced-fault test injects a hung COLD path (e.g. `coldClient` that never resolves, or throws synchronously, or times out) and asserts P0 alerts (`OVERSTEER_RECOVERY`, future `BRAKE`) still emit within the HOT-path latency budget.
+- Documented in `docs/data-reasoning.md`: exact list of triggers that produce P0, exact bypass behavior (skips TimingGate blackout, preempts queue, no humanization budget), and exact failure modes that do **not** affect P0.
+- Test suite covers: COLD hang (Promise pending forever), COLD reject (synchronous throw), COLD slow (resolves after 5s), COLD success (control case).
+- Latency benchmark extended to assert P0 latency under fault remains within budget.
+
+**Dependencies:** None. Self-contained on `data-reasoning`.
+
+---
+
+### DR-3 — HOT-path humanization ≤50ms with raw-command fallback
+
+**As a** Data Reasoning engineer enforcing the 50ms HOT-path budget,
+**I want** humanization to be measured per call and to fall back to a raw robotic command when it exceeds budget,
+**so that** rapport-building language never costs us field-test reliability.
+
+**Acceptance criteria:**
+- `humanizeAction` (or its caller) measures elapsed time per invocation.
+- If a single call exceeds the configurable `humanizationBudgetMs` (default 50ms), the next P0/P1 emission falls back to the raw action label (e.g. `"BRAKE_NOW"`) instead of the humanized phrase.
+- Latency benchmark extended to assert: under load (1000 frames), p99 humanization stays under budget; if it doesn't, the test fails loudly so we catch it before the track.
+- Documented in `docs/data-reasoning.md`.
+
+**Dependencies:** None. Self-contained on `data-reasoning`.
+
+---
+
+### DR-4 — "Why over What" prompt restructuring in COLD
+
+**As a** beginner driver who knows I missed the apex,
+**I want** the post-corner explanation to tell me *why* (e.g. "your brake release was too abrupt, unloading the front tires") instead of restating the symptom,
+**so that** I learn the underlying physics, not just my own mistake.
+
+**Acceptance criteria:**
+- COLD-path prompt template explicitly asks for root-cause analysis, not symptom restatement.
+- Prompt includes physics context (weight transfer, friction circle position, brake/throttle sequencing) for the LLM to reason over.
+- Test asserts the prompt template contains the root-cause framing and at least one physics-context placeholder.
+- Manual review of three sample COLD outputs against the new prompt template — captured in PR description.
+
+**Dependencies:** None.
+
+---
+
+### DR-5 — Eyes-up vision coaching in FEEDFORWARD
+
+**As a** beginner driver approaching Sonoma's T10 (a high-speed blind crest),
+**I want** the FEEDFORWARD path to coach my eyes ("Eyes up, look for the bridge tire mark") in addition to telling me what to do with the pedals,
+**so that** I'm looking at the right reference point before the corner instead of staring at the hood.
+
+**Acceptance criteria:**
+- Track-corner enrichment data (in `trackData.ts` or equivalent) gains an optional `visualReference` field (string).
+- FEEDFORWARD action selection includes a vision cue when `visualReference` is set on the upcoming corner.
+- At least 3 Sonoma corners (incl. T10) have `visualReference` populated from T-Rod or Ross Bentley source material.
+- Tests assert: corners with `visualReference` produce a FEEDFORWARD message containing the cue; corners without it fall back to the existing pedal/wheel guidance.
+
+**Dependencies:** None.
+
+---
+
+### DR-6 — Humanization safety override under high-slip / high-speed braking
+
+**As a** driver in a developing spin at 90 mph,
+**I want** the coach to drop conversational pleasantries and bark a sharp authoritative command,
+**so that** I react to the urgency in the voice, not the friendliness of the phrasing.
+
+**Acceptance criteria:**
+- A safety-override predicate evaluates each P0 emission and bypasses humanization when: (a) `OVERSTEER_RECOVERY` is firing, OR (b) speed > configurable `highSpeedBrakeThreshold` (default 70 mph) AND a `BRAKE` action is firing.
+- Output under override is the raw, terse command (e.g. `"Both feet in!"`, `"Brake hard!"`) — no persona inflection, no rapport language.
+- Tests assert: humanization is bypassed under each override condition; humanization is preserved under normal conditions.
+- Documented in `docs/data-reasoning.md` alongside the P0 bypass parameters.
+
+**Dependencies:** None. Pairs naturally with DR-2.
+
+---
+
+### DR-7 — Abstract geofence triggers for cross-domain portability *(post-Sonoma)*
+
+**As an** engineer reusing this framework for a delivery drone or a manufacturing assembly line,
+**I want** the FEEDFORWARD trigger to consume generic temporal/spatial events (not track-coordinate-specific corner objects),
+**so that** I can drop in a different domain's geometry without rewriting the routing engine.
+
+**Acceptance criteria:**
+- A `FeedforwardTrigger` interface defines `predicate(state) → boolean` and `payload` (the action/message). Track corners become one implementation of this interface.
+- The routing engine no longer references corner objects directly — only triggers.
+- An example non-track trigger (e.g. "drone approaching waypoint", as a unit test fixture) demonstrates the abstraction works.
+- Documented in `docs/learnings-real-time-data-reasoning.md` as a "what ports today" entry.
+
+**Dependencies:** None. Not gating May 23 — explicitly scheduled for after the field test.
+
+---
+
+
 
 ### ET-1 — Extend `streaming-telemetry-server` to emit the merged stream
 
@@ -149,16 +269,19 @@ Companion to the [Roadmap in the README](../README.md#roadmap). This document tr
 
 ## AGY Pipeline
 
-### AGY-1 — Post-session data schema
+**Owners:** Mike Wolfson (lead) + Austin (collaborator).
+
+### AGY-1 — Post-session data schema *(generic time-series, per April 29 feedback)*
 
 **As an** AGY Pipeline engineer storing session data,
-**I want** a documented schema for coaching events and lap metrics,
-**so that** every session produces a consistent record that Data Reasoning and analytics can consume.
+**I want** a documented schema for coaching events and lap metrics that accepts **generic time-series sensor payloads** rather than being hardcoded to car telemetry,
+**so that** every session produces a consistent record AND the same pipeline can ingest data from a delivery drone, an ultra-trail runner, or a factory line without schema changes.
 
 **Acceptance criteria:**
 - Schema documented in `docs/session-schema.md` with JSON examples.
-- Covers: per-frame telemetry, coaching events (`CoachingDecision` payloads with timestamps), per-lap metrics (lap time, sector times, per-corner min speed / max brake / exit speed).
-- Schema references existing TypeScript types in `koru-application/src/types.ts` where applicable.
+- **Generic structure:** time-series sensor frames use a domain-agnostic shape (`timestamp`, `sourceId`, `channels: { [name]: number | string }`) rather than naming `RPM` / `throttle` / `brake` at the top level. Domain-specific channel names live inside `channels`. The April 29 reviewer raised this directly — flag it explicitly.
+- Covers: per-frame telemetry, coaching events (`CoachingDecision` payloads with timestamps), per-lap (or per-segment) metrics.
+- Schema references existing TypeScript types in `koru-application/src/types.ts` where applicable, but the storage shape is the generic envelope.
 - Decision recorded: storage target (BigQuery / local JSON / IndexedDB) with rationale (offline-first at the track is a hard constraint).
 - Versioning strategy: a `schemaVersion` field so future changes can migrate old sessions.
 
@@ -234,6 +357,7 @@ Companion to the [Roadmap in the README](../README.md#roadmap). This document tr
 - Max 3 goals enforced by UI (Ross Bentley pedagogy constraint).
 - Goals map cleanly to focus categories: `braking`, `throttle`, `vision`, `lines`, `smoothness`, `custom`.
 - Accessible: keyboard navigation, screen reader friendly.
+- **Per April 29 feedback:** the UI is built as a domain-agnostic "Session Initialization" component. Driver-specific labels (e.g. "braking", "vision") are passed in as configuration, not hardcoded — so the same component can initialize a delivery-drone operator, an ultra-trail runner, or a factory operator in a future deployment. Owner: Rabimba Karanjai.
 
 **Dependencies:** `SessionGoal` type and contract (already defined by Data Reasoning).
 
