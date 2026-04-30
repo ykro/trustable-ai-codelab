@@ -7,6 +7,13 @@ import { CoachingQueue } from './coachingQueue';
 import { DriverModel } from './driverModel';
 import { PerformanceTracker } from './performanceTracker';
 
+// ── DR-3: Humanization latency budget ─────────────────────
+/** If a single humanizeAction call exceeds this, the NEXT hot-path emission
+ *  drops humanization and emits the raw action label (e.g. "BRAKE") instead.
+ *  Humanization should normally be sub-millisecond — 50ms is a tripwire,
+ *  not an expected operating point. */
+const HUMANIZATION_BUDGET_MS = 50;
+
 /** Map actions to priority levels (module-level Map avoids per-call array allocations).
  *  Safety bypass is determined by `priority === 0` at the call site, not by a separate set. */
 const ACTION_PRIORITY: Map<string, 0 | 1 | 2 | 3> = new Map([
@@ -61,6 +68,16 @@ export class CoachingService {
   private sessionGoals: SessionGoal[] = [];
   private prioritizedActionSet: Set<CoachAction> = new Set();
 
+  // ── DR-3: Humanization budget tracking ──────────────────
+  /** Per-call wall-clock samples; bounded ring buffer to avoid unbounded growth. */
+  private humanizationLatencySamples: number[] = [];
+  private static readonly LATENCY_SAMPLE_CAP = 2000;
+  /** Sticky for ONE emission after a budget breach: next hot-path emission
+   *  uses the raw action label, then this resets. Single-frame stickiness keeps
+   *  the recovery cheap without permanently degrading coaching quality. */
+  private humanizationFallbackArmed = false;
+  private humanizationBudgetMs = HUMANIZATION_BUDGET_MS;
+
   // Session progression
   private sessionPhase: 1 | 2 | 3 = 1;
   private static readonly PHASE_SUPPRESSED: Record<number, Set<CoachAction>> = {
@@ -86,6 +103,46 @@ export class CoachingService {
   getDriverState() { return this.driverModel.getState(); }
   getSessionGoals() { return this.sessionGoals; }
   getPerformanceTracker() { return this.performanceTracker; }
+
+  // ── DR-3 configuration & telemetry ───────────────────────
+  /** Returns the live ring buffer of per-call humanization latencies (ms).
+   *  Tests and the latency benchmark use this. Mutating clears history. */
+  getHumanizationLatencySamples(): number[] { return this.humanizationLatencySamples; }
+  setHumanizationBudgetMs(ms: number): void { this.humanizationBudgetMs = ms; }
+
+  /**
+   * Wraps humanizeAction with:
+   *  - DR-3 raw-label fallback (if the previous call breached the budget, return
+   *    the raw action label this once and disarm the flag)
+   *  - DR-3 latency measurement (records every call that DOES humanize)
+   */
+  private humanizeOrFallback(action: CoachAction, frame: TelemetryFrame): string {
+    // DR-3 fallback: prior call breached the budget → emit raw label this once.
+    if (this.humanizationFallbackArmed) {
+      this.humanizationFallbackArmed = false;
+      return action;
+    }
+    const start = performance.now();
+    const text = this.humanizeAction(action, frame);
+    const elapsed = performance.now() - start;
+
+    // Bounded ring buffer — drop oldest when capped.
+    if (this.humanizationLatencySamples.length >= CoachingService.LATENCY_SAMPLE_CAP) {
+      this.humanizationLatencySamples.shift();
+    }
+    this.humanizationLatencySamples.push(elapsed);
+
+    if (elapsed > this.humanizationBudgetMs) {
+      this.humanizationFallbackArmed = true;
+      if (import.meta.env.DEV) {
+        console.warn(
+          `[humanizeAction] budget breach: ${elapsed.toFixed(2)}ms > ${this.humanizationBudgetMs}ms ` +
+          `(action=${action}). Next emission will use raw label.`,
+        );
+      }
+    }
+    return text;
+  }
 
   /** Call when a new lap starts (e.g. from lap detection logic).
    *  Surfaces the flushed corner's improvement decision into the queue. */
@@ -243,7 +300,7 @@ export class CoachingService {
         const decision: CoachingDecision = {
           path: 'hot',
           action: rule.action,
-          text: this.humanizeAction(rule.action, frame),
+          text: this.humanizeOrFallback(rule.action, frame),
           priority,
           cornerPhase: this.currentPhase,
           timestamp: Date.now(),
@@ -271,7 +328,7 @@ export class CoachingService {
       this.coachingQueue.enqueue({
         path: 'hot',
         action: 'COGNITIVE_OVERLOAD',
-        text: this.humanizeAction('COGNITIVE_OVERLOAD', frame),
+        text: this.humanizeOrFallback('COGNITIVE_OVERLOAD', frame),
         priority: this.boostForGoals('COGNITIVE_OVERLOAD', 2),
         cornerPhase: this.currentPhase,
         timestamp: Date.now(),
@@ -301,7 +358,7 @@ export class CoachingService {
       this.coachingQueue.enqueue({
         path: 'hot',
         action: 'HUSTLE',
-        text: this.humanizeAction('HUSTLE', frame),
+        text: this.humanizeOrFallback('HUSTLE', frame),
         priority: this.boostForGoals('HUSTLE', 3),
         cornerPhase: this.currentPhase,
         timestamp: Date.now(),
