@@ -23,6 +23,38 @@ function actionPriority(action: CoachAction): 0 | 1 | 2 | 3 {
 
 type CoachingCallback = (msg: CoachingDecision) => void;
 
+// ── FEEDFORWARD geofence tunables (DR-1) ───────────────────
+// Replace the legacy static 150m radius with a velocity-scaled trigger so
+// the lead time the driver gets is constant in *seconds*, not in metres.
+// At 100 mph a 150m fence gave only ~3.3s of lead — minus a 1.5s TTS budget
+// the driver had ~1.8s of cognitive headroom. Scaling by velocity gives
+// FEEDFORWARD_LEAD_S of true thinking time at every speed.
+//
+//   triggerDistance = max(MIN_TRIGGER_M, v_mps * (FEEDFORWARD_LEAD_S + TTS_BUDGET_S))
+export const FEEDFORWARD_LEAD_S = 3.0;
+export const TTS_BUDGET_S = 1.5;
+export const MIN_TRIGGER_M = 40;
+export const MPH_TO_MPS = 0.44704;
+
+/** Velocity-scaled FEEDFORWARD geofence radius (DR-1).
+ *  Returns 0 when stationary so the path does not fire at idle. */
+export function getTriggerDistance(speedMph: number): number {
+  if (!Number.isFinite(speedMph) || speedMph <= 0) return 0;
+  const vMps = speedMph * MPH_TO_MPS;
+  const scaled = vMps * (FEEDFORWARD_LEAD_S + TTS_BUDGET_S);
+  return Math.max(MIN_TRIGGER_M, scaled);
+}
+
+/** Build the FEEDFORWARD message text for a corner (DR-5).
+ *  When the corner has a `visualReference`, prepend it so the driver is told
+ *  where to *look* before being told what to do with the pedals. */
+export function buildFeedforwardText(corner: Corner): string {
+  if (corner.visualReference && corner.visualReference.trim().length > 0) {
+    return `${corner.name}: ${corner.visualReference}. ${corner.advice}`;
+  }
+  return `${corner.name}: ${corner.advice}`;
+}
+
 /**
  * Split-brain coaching engine:
  * - HOT: heuristic rules with humanized text (<50ms)
@@ -641,13 +673,20 @@ ${instruction}`;
   private runFeedforward(frame: TelemetryFrame) {
     if (!this.track) return;
     if (!isValidGps(frame.latitude, frame.longitude)) return;
-    const nearest = this.findNearestCorner(frame.latitude, frame.longitude, this.track.corners);
+    // DR-1: velocity-scaled geofence. At 0 mph triggerDistance == 0 so the
+    // path does not fire when the car is stationary (e.g. paddock, pre-grid).
+    const triggerDistance = getTriggerDistance(frame.speed);
+    if (triggerDistance <= 0) return;
+    const nearest = this.findNearestCornerWithinTriggerDistance(
+      frame.latitude, frame.longitude, this.track.corners, triggerDistance,
+    );
 
     if (nearest && nearest !== this.lastCorner) {
       this.lastCorner = nearest;
       this.coachingQueue.enqueue({
         path: 'feedforward',
-        text: `${nearest.name}: ${nearest.advice}`,
+        // DR-5: vision cue is prepended when the corner has visualReference.
+        text: buildFeedforwardText(nearest),
         priority: 1,
         cornerPhase: this.currentPhase,
         timestamp: Date.now(),
@@ -655,12 +694,14 @@ ${instruction}`;
     }
   }
 
-  private findNearestCorner(lat: number, lon: number, corners: Corner[]): Corner | null {
-    // Pick the geometrically closest corner within 150m — not the first one in
-    // array order. At Sonoma's T2/T3 complex two corner geofences can overlap;
-    // returning the actually-closest avoids array-order determining which advice fires.
+  /** Pick the geometrically closest corner within `triggerDistance` metres.
+   *  At Sonoma's T2/T3 complex two corner geofences can overlap; returning the
+   *  actually-closest avoids array-order determining which advice fires. */
+  private findNearestCornerWithinTriggerDistance(
+    lat: number, lon: number, corners: Corner[], triggerDistance: number,
+  ): Corner | null {
     let nearest: Corner | null = null;
-    let minDist = 150;
+    let minDist = triggerDistance;
     for (const c of corners) {
       const dist = haversineDistance(lat, lon, c.lat, c.lon);
       if (dist < minDist) {
