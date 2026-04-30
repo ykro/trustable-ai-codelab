@@ -14,6 +14,28 @@ import { PerformanceTracker } from './performanceTracker';
  *  not an expected operating point. */
 const HUMANIZATION_BUDGET_MS = 50;
 
+// ── DR-6: Safety-override of humanization ─────────────────
+/** Above this speed, BRAKE-class actions bypass humanization and emit a
+ *  short authoritative imperative. Frame speed is in mph (see TelemetryFrame). */
+const HIGH_SPEED_BRAKE_THRESHOLD_MPH = 70;
+
+/** Actions that are "BRAKE-class" for the high-speed safety override. */
+const BRAKE_CLASS_ACTIONS: ReadonlySet<CoachAction> = new Set<CoachAction>([
+  'BRAKE', 'THRESHOLD', 'SPIKE_BRAKE', 'TRAIL_BRAKE',
+]);
+
+/** Terse, authoritative imperatives for safety-override emissions.
+ *  Tone borrowed from Ross Bentley trigger phrases ("Both feet in!" /
+ *  "Brake hard!" / "Eyes up!"). Only actions reachable via the override need
+ *  entries — anything else falls back to the raw action label. */
+const SAFETY_OVERRIDE_TEXT: Partial<Record<CoachAction, string>> = {
+  OVERSTEER_RECOVERY: 'Both feet in!',
+  BRAKE: 'Brake hard!',
+  THRESHOLD: 'Brake hard!',
+  SPIKE_BRAKE: 'Brake hard!',
+  TRAIL_BRAKE: 'Brake hard!',
+};
+
 /** Map actions to priority levels (module-level Map avoids per-call array allocations).
  *  Safety bypass is determined by `priority === 0` at the call site, not by a separate set. */
 const ACTION_PRIORITY: Map<string, 0 | 1 | 2 | 3> = new Map([
@@ -78,6 +100,9 @@ export class CoachingService {
   private humanizationFallbackArmed = false;
   private humanizationBudgetMs = HUMANIZATION_BUDGET_MS;
 
+  // ── DR-6: Safety-override threshold (configurable) ──────
+  private highSpeedBrakeThresholdMph = HIGH_SPEED_BRAKE_THRESHOLD_MPH;
+
   // Session progression
   private sessionPhase: 1 | 2 | 3 = 1;
   private static readonly PHASE_SUPPRESSED: Record<number, Set<CoachAction>> = {
@@ -109,14 +134,33 @@ export class CoachingService {
    *  Tests and the latency benchmark use this. Mutating clears history. */
   getHumanizationLatencySamples(): number[] { return this.humanizationLatencySamples; }
   setHumanizationBudgetMs(ms: number): void { this.humanizationBudgetMs = ms; }
+  setHighSpeedBrakeThresholdMph(mph: number): void { this.highSpeedBrakeThresholdMph = mph; }
+
+  /**
+   * DR-6: Should we bypass humanization and emit a terse safety imperative?
+   *  (a) OVERSTEER_RECOVERY — always (high-slip, regardless of speed).
+   *  (b) BRAKE-class action AND speed > threshold (panic-brake at speed).
+   * Public for unit testing of the predicate in isolation.
+   */
+  shouldBypassHumanization(action: CoachAction, frame: TelemetryFrame): boolean {
+    if (action === 'OVERSTEER_RECOVERY') return true;
+    if (BRAKE_CLASS_ACTIONS.has(action) && frame.speed > this.highSpeedBrakeThresholdMph) return true;
+    return false;
+  }
 
   /**
    * Wraps humanizeAction with:
+   *  - DR-6 safety bypass (returns SAFETY_OVERRIDE_TEXT, no humanization at all)
    *  - DR-3 raw-label fallback (if the previous call breached the budget, return
    *    the raw action label this once and disarm the flag)
    *  - DR-3 latency measurement (records every call that DOES humanize)
    */
   private humanizeOrFallback(action: CoachAction, frame: TelemetryFrame): string {
+    // DR-6 takes precedence — the override imperative is the right output
+    // regardless of any DR-3 budget state. We do NOT measure these calls.
+    if (this.shouldBypassHumanization(action, frame)) {
+      return SAFETY_OVERRIDE_TEXT[action] ?? action;
+    }
     // DR-3 fallback: prior call breached the budget → emit raw label this once.
     if (this.humanizationFallbackArmed) {
       this.humanizationFallbackArmed = false;
