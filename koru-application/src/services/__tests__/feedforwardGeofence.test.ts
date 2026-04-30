@@ -6,6 +6,7 @@ import {
   MIN_TRIGGER_M,
   MPH_TO_MPS,
   getTriggerDistance,
+  buildFeedforwardText,
 } from '../coachingService';
 import type { CoachingDecision, TelemetryFrame, Corner, Track } from '../../types';
 
@@ -169,5 +170,86 @@ describe('DR-1 FEEDFORWARD geofence — fires only inside scaled radius', () => 
     const unscaledMetres = 5 * MPH_TO_MPS * (FEEDFORWARD_LEAD_S + TTS_BUDGET_S);
     expect(unscaledMetres).toBeLessThan(MIN_TRIGGER_M);
     expect(getTriggerDistance(5)).toBe(MIN_TRIGGER_M);
+  });
+});
+// ── DR-5: eyes-up vision coaching ──────────────────────────
+
+describe('DR-5 buildFeedforwardText', () => {
+  it('prepends the visualReference cue when present', () => {
+    const corner: Corner = {
+      id: 10, name: 'Turn 10',
+      entryDist: 0, apexDist: 0, exitDist: 0,
+      lat: 0, lon: 0,
+      advice: 'Stay committed through the kink',
+      visualReference: 'Eyes up to the bridge tire mark',
+    };
+    const text = buildFeedforwardText(corner);
+    expect(text).toBe('Turn 10: Eyes up to the bridge tire mark. Stay committed through the kink');
+  });
+
+  it('falls back to plain "name: advice" when visualReference is undefined', () => {
+    const corner: Corner = {
+      id: 1, name: 'Turn 1',
+      entryDist: 0, apexDist: 0, exitDist: 0,
+      lat: 0, lon: 0,
+      advice: 'Brake early, late apex',
+    };
+    expect(buildFeedforwardText(corner)).toBe('Turn 1: Brake early, late apex');
+  });
+
+  it('treats whitespace-only visualReference as missing', () => {
+    const corner: Corner = {
+      id: 2, name: 'Turn 2',
+      entryDist: 0, apexDist: 0, exitDist: 0,
+      lat: 0, lon: 0,
+      advice: 'Patient throttle',
+      visualReference: '   ',
+    };
+    expect(buildFeedforwardText(corner)).toBe('Turn 2: Patient throttle');
+  });
+});
+
+describe('DR-5 FEEDFORWARD message — vision cue integration', () => {
+  let service: CoachingService;
+  let decisions: CoachingDecision[];
+  const carLat = 38.16;
+  const carLon = -122.45;
+
+  beforeEach(() => {
+    service = new CoachingService();
+    decisions = [];
+    service.onCoaching(msg => decisions.push(msg));
+  });
+
+  it('emits the vision cue for corners that have visualReference', () => {
+    const corner = cornerNorthOfCar(80, carLat, carLon, {
+      id: 10, name: 'Turn 10',
+      advice: 'Stay committed through the kink',
+      visualReference: 'Eyes up to the bridge tire mark',
+    });
+    service.setTrack(trackWithCorners([corner]));
+    service.processFrame(createFrame({
+      speed: 60, latitude: carLat, longitude: carLon,
+    }));
+    const ff = decisions.find(d => d.path === 'feedforward');
+    expect(ff).toBeDefined();
+    expect(ff!.text).toContain('Eyes up to the bridge tire mark');
+    expect(ff!.text).toContain('Stay committed through the kink');
+  });
+
+  it('emits the unchanged pedal/wheel message for corners without visualReference', () => {
+    const corner = cornerNorthOfCar(80, carLat, carLon, {
+      id: 1, name: 'Turn 1',
+      advice: 'Brake early, late apex',
+      // no visualReference
+    });
+    service.setTrack(trackWithCorners([corner]));
+    service.processFrame(createFrame({
+      speed: 60, latitude: carLat, longitude: carLon,
+    }));
+    const ff = decisions.find(d => d.path === 'feedforward');
+    expect(ff).toBeDefined();
+    expect(ff!.text).toBe('Turn 1: Brake early, late apex');
+    expect(ff!.text).not.toContain('Eyes up');
   });
 });

@@ -48,6 +48,14 @@ export interface Corner {
   entryLat?: number;
   entryLon?: number;
   targetSpeed?: number;    // safe entry speed (mph)
+  /**
+   * Optional eyes-up vision cue for the FEEDFORWARD path (DR-5).
+   * When set, the FEEDFORWARD message prepends this cue so the driver
+   * is told *where to look* before the corner, not just what to do with
+   * pedals. Use evocative landmarks ("Eyes up to the bridge tire mark")
+   * over generic feet instructions.
+   */
+  visualReference?: string;
 }
 
 export interface Sector {

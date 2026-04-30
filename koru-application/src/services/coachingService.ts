@@ -45,6 +45,16 @@ export function getTriggerDistance(speedMph: number): number {
   return Math.max(MIN_TRIGGER_M, scaled);
 }
 
+/** Build the FEEDFORWARD message text for a corner (DR-5).
+ *  When the corner has a `visualReference`, prepend it so the driver is told
+ *  where to *look* before being told what to do with the pedals. */
+export function buildFeedforwardText(corner: Corner): string {
+  if (corner.visualReference && corner.visualReference.trim().length > 0) {
+    return `${corner.name}: ${corner.visualReference}. ${corner.advice}`;
+  }
+  return `${corner.name}: ${corner.advice}`;
+}
+
 /**
  * Split-brain coaching engine:
  * - HOT: heuristic rules with humanized text (<50ms)
@@ -675,7 +685,8 @@ ${instruction}`;
       this.lastCorner = nearest;
       this.coachingQueue.enqueue({
         path: 'feedforward',
-        text: `${nearest.name}: ${nearest.advice}`,
+        // DR-5: vision cue is prepended when the corner has visualReference.
+        text: buildFeedforwardText(nearest),
         priority: 1,
         cornerPhase: this.currentPhase,
         timestamp: Date.now(),
