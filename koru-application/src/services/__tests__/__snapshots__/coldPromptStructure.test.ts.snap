@@ -1,0 +1,36 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`buildColdPrompt — snapshot for canonical missed-apex scenario > matches snapshot so future drift is reviewable 1`] = `
+"<<SYSTEM_PROMPT>>
+
+<<PHYSICS_KNOWLEDGE>>
+
+Current Telemetry:
+Speed: 81.0 mph | Brake: 0% | Throttle: 5%
+G-Lat: 1.25 | G-Long: 0.00 | Combined: 1.25G
+Phase: MID_CORNER
+Location: Turn 7 - Late apex, watch for camber.
+
+Computed Physics Context (last 24 samples, ~960ms window):
+- Lateral weight transfer (∫gLat dt): 0.724 G·s
+- Longitudinal weight transfer (∫gLong dt): -0.440 G·s
+- Peak combined G: 1.25G
+- Friction-circle utilization: 89% of 1.4G limit
+- Brake release rate (d(brake)/dt from peak): -750.0 %/s (ABRUPT — unloads front tires)
+- Throttle application rate (d(throttle)/dt rising): 0.0 %/s
+- Speed delta over window: -14.0 mph
+
+ROOT CAUSE ANALYSIS DIRECTIVE:
+Do NOT restate the symptom — the driver already knows what happened (e.g. they
+know they missed the apex, ran wide, or were slow on exit). Use the computed
+physics context above to explain WHY it happened in mechanical terms (weight
+transfer, friction-circle position, brake-release rate, tire loading). The
+"why" is what the driver cannot feel from the seat. That is your value.
+
+OUTPUT FORMAT (mandatory — emit exactly these three sections, in order, each ONE short sentence):
+Symptom: <what the driver felt — one short clause, no numbers>
+Root Cause: <the physics, grounded in at least one number from the context above>
+Fix: <ONE physical action the driver can take next lap>
+
+Output under 30 words total. Feel-based language. No jargon. Drive a beginner toward ONE physical fix."
+`;
