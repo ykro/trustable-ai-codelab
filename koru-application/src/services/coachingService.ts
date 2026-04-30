@@ -7,6 +7,35 @@ import { CoachingQueue } from './coachingQueue';
 import { DriverModel } from './driverModel';
 import { PerformanceTracker } from './performanceTracker';
 
+// ── DR-3: Humanization latency budget ─────────────────────
+/** If a single humanizeAction call exceeds this, the NEXT hot-path emission
+ *  drops humanization and emits the raw action label (e.g. "BRAKE") instead.
+ *  Humanization should normally be sub-millisecond — 50ms is a tripwire,
+ *  not an expected operating point. */
+const HUMANIZATION_BUDGET_MS = 50;
+
+// ── DR-6: Safety-override of humanization ─────────────────
+/** Above this speed, BRAKE-class actions bypass humanization and emit a
+ *  short authoritative imperative. Frame speed is in mph (see TelemetryFrame). */
+const HIGH_SPEED_BRAKE_THRESHOLD_MPH = 70;
+
+/** Actions that are "BRAKE-class" for the high-speed safety override. */
+const BRAKE_CLASS_ACTIONS: ReadonlySet<CoachAction> = new Set<CoachAction>([
+  'BRAKE', 'THRESHOLD', 'SPIKE_BRAKE', 'TRAIL_BRAKE',
+]);
+
+/** Terse, authoritative imperatives for safety-override emissions.
+ *  Tone borrowed from Ross Bentley trigger phrases ("Both feet in!" /
+ *  "Brake hard!" / "Eyes up!"). Only actions reachable via the override need
+ *  entries — anything else falls back to the raw action label. */
+const SAFETY_OVERRIDE_TEXT: Partial<Record<CoachAction, string>> = {
+  OVERSTEER_RECOVERY: 'Both feet in!',
+  BRAKE: 'Brake hard!',
+  THRESHOLD: 'Brake hard!',
+  SPIKE_BRAKE: 'Brake hard!',
+  TRAIL_BRAKE: 'Brake hard!',
+};
+
 /** Map actions to priority levels (module-level Map avoids per-call array allocations).
  *  Safety bypass is determined by `priority === 0` at the call site, not by a separate set. */
 const ACTION_PRIORITY: Map<string, 0 | 1 | 2 | 3> = new Map([
@@ -93,6 +122,19 @@ export class CoachingService {
   private sessionGoals: SessionGoal[] = [];
   private prioritizedActionSet: Set<CoachAction> = new Set();
 
+  // ── DR-3: Humanization budget tracking ──────────────────
+  /** Per-call wall-clock samples; bounded ring buffer to avoid unbounded growth. */
+  private humanizationLatencySamples: number[] = [];
+  private static readonly LATENCY_SAMPLE_CAP = 2000;
+  /** Sticky for ONE emission after a budget breach: next hot-path emission
+   *  uses the raw action label, then this resets. Single-frame stickiness keeps
+   *  the recovery cheap without permanently degrading coaching quality. */
+  private humanizationFallbackArmed = false;
+  private humanizationBudgetMs = HUMANIZATION_BUDGET_MS;
+
+  // ── DR-6: Safety-override threshold (configurable) ──────
+  private highSpeedBrakeThresholdMph = HIGH_SPEED_BRAKE_THRESHOLD_MPH;
+
   // Session progression
   private sessionPhase: 1 | 2 | 3 = 1;
   private static readonly PHASE_SUPPRESSED: Record<number, Set<CoachAction>> = {
@@ -118,6 +160,65 @@ export class CoachingService {
   getDriverState() { return this.driverModel.getState(); }
   getSessionGoals() { return this.sessionGoals; }
   getPerformanceTracker() { return this.performanceTracker; }
+
+  // ── DR-3 configuration & telemetry ───────────────────────
+  /** Returns the live ring buffer of per-call humanization latencies (ms).
+   *  Tests and the latency benchmark use this. Mutating clears history. */
+  getHumanizationLatencySamples(): number[] { return this.humanizationLatencySamples; }
+  setHumanizationBudgetMs(ms: number): void { this.humanizationBudgetMs = ms; }
+  setHighSpeedBrakeThresholdMph(mph: number): void { this.highSpeedBrakeThresholdMph = mph; }
+
+  /**
+   * DR-6: Should we bypass humanization and emit a terse safety imperative?
+   *  (a) OVERSTEER_RECOVERY — always (high-slip, regardless of speed).
+   *  (b) BRAKE-class action AND speed > threshold (panic-brake at speed).
+   * Public for unit testing of the predicate in isolation.
+   */
+  shouldBypassHumanization(action: CoachAction, frame: TelemetryFrame): boolean {
+    if (action === 'OVERSTEER_RECOVERY') return true;
+    if (BRAKE_CLASS_ACTIONS.has(action) && frame.speed > this.highSpeedBrakeThresholdMph) return true;
+    return false;
+  }
+
+  /**
+   * Wraps humanizeAction with:
+   *  - DR-6 safety bypass (returns SAFETY_OVERRIDE_TEXT, no humanization at all)
+   *  - DR-3 raw-label fallback (if the previous call breached the budget, return
+   *    the raw action label this once and disarm the flag)
+   *  - DR-3 latency measurement (records every call that DOES humanize)
+   */
+  private humanizeOrFallback(action: CoachAction, frame: TelemetryFrame): string {
+    // DR-6 takes precedence — the override imperative is the right output
+    // regardless of any DR-3 budget state. We do NOT measure these calls.
+    if (this.shouldBypassHumanization(action, frame)) {
+      return SAFETY_OVERRIDE_TEXT[action] ?? action;
+    }
+    // DR-3 fallback: prior call breached the budget → emit raw label this once.
+    if (this.humanizationFallbackArmed) {
+      this.humanizationFallbackArmed = false;
+      return action;
+    }
+    const start = performance.now();
+    const text = this.humanizeAction(action, frame);
+    const elapsed = performance.now() - start;
+
+    // Bounded ring buffer — drop oldest when capped.
+    if (this.humanizationLatencySamples.length >= CoachingService.LATENCY_SAMPLE_CAP) {
+      this.humanizationLatencySamples.shift();
+    }
+    this.humanizationLatencySamples.push(elapsed);
+
+    if (elapsed > this.humanizationBudgetMs) {
+      this.humanizationFallbackArmed = true;
+      if (import.meta.env.DEV) {
+        console.warn(
+          `[humanizeAction] budget breach: ${elapsed.toFixed(2)}ms > ${this.humanizationBudgetMs}ms ` +
+          `(action=${action}). Next emission will use raw label.`,
+        );
+      }
+    }
+    return text;
+  }
 
   /** Call when a new lap starts (e.g. from lap detection logic).
    *  Surfaces the flushed corner's improvement decision into the queue. */
@@ -275,7 +376,7 @@ export class CoachingService {
         const decision: CoachingDecision = {
           path: 'hot',
           action: rule.action,
-          text: this.humanizeAction(rule.action, frame),
+          text: this.humanizeOrFallback(rule.action, frame),
           priority,
           cornerPhase: this.currentPhase,
           timestamp: Date.now(),
@@ -303,7 +404,7 @@ export class CoachingService {
       this.coachingQueue.enqueue({
         path: 'hot',
         action: 'COGNITIVE_OVERLOAD',
-        text: this.humanizeAction('COGNITIVE_OVERLOAD', frame),
+        text: this.humanizeOrFallback('COGNITIVE_OVERLOAD', frame),
         priority: this.boostForGoals('COGNITIVE_OVERLOAD', 2),
         cornerPhase: this.currentPhase,
         timestamp: Date.now(),
@@ -333,7 +434,7 @@ export class CoachingService {
       this.coachingQueue.enqueue({
         path: 'hot',
         action: 'HUSTLE',
-        text: this.humanizeAction('HUSTLE', frame),
+        text: this.humanizeOrFallback('HUSTLE', frame),
         priority: this.boostForGoals('HUSTLE', 3),
         cornerPhase: this.currentPhase,
         timestamp: Date.now(),
