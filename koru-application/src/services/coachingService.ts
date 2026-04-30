@@ -6,6 +6,7 @@ import { TimingGate } from './timingGate';
 import { CoachingQueue } from './coachingQueue';
 import { DriverModel } from './driverModel';
 import { PerformanceTracker } from './performanceTracker';
+import { buildColdPrompt } from './coldPromptBuilder';
 
 /** Map actions to priority levels (module-level Map avoids per-call array allocations).
  *  Safety bypass is determined by `priority === 0` at the call site, not by a separate set. */
@@ -53,6 +54,11 @@ export class CoachingService {
   private lastSkillLevel: import('../types').SkillLevel = 'BEGINNER';
   private lastCognitiveCheck = 0;
   private lastHustleFire = 0;
+
+  // Recent telemetry window for the COLD prompt builder. ~2s at 25Hz = 50 frames.
+  // Keep this small — it's read on every cold call but only the cold path needs it.
+  private static readonly COLD_WINDOW_FRAMES = 50;
+  private coldFrameWindow: TelemetryFrame[] = [];
 
   // Session goals (Phase 6.2 — populated by pre-race chat or auto-generated).
   // Actions that appear in any active goal's prioritizedActions get promoted
@@ -139,6 +145,12 @@ export class CoachingService {
 
   /** Called on every telemetry frame */
   processFrame(frame: TelemetryFrame) {
+    // Maintain rolling window for COLD prompt builder (DR-4).
+    this.coldFrameWindow.push(frame);
+    if (this.coldFrameWindow.length > CoachingService.COLD_WINDOW_FRAMES) {
+      this.coldFrameWindow.shift();
+    }
+
     // Detect corner phase
     const detection = this.cornerDetector.detect(frame);
     this.currentPhase = detection.phase;
@@ -564,6 +576,25 @@ export class CoachingService {
 
   // ── COLD PATH: Gemini Cloud detailed analysis ──────────
 
+  /**
+   * Build the COLD prompt for the current state. Pure-ish (depends on this.*),
+   * exposed so tests can render the prompt without invoking Gemini. DR-4.
+   */
+  buildColdPromptForCurrentState(frame?: TelemetryFrame): string {
+    const coach = this.getCoach();
+    const window = frame
+      ? [...this.coldFrameWindow, ...(this.coldFrameWindow[this.coldFrameWindow.length - 1] === frame ? [] : [frame])]
+      : this.coldFrameWindow;
+    return buildColdPrompt({
+      frames: window,
+      cornerPhase: this.currentPhase,
+      corner: this.lastCorner,
+      skillLevel: this.driverModel.getSkillLevel(),
+      systemPrompt: coach.systemPrompt,
+      physicsKnowledge: RACING_PHYSICS_KNOWLEDGE,
+    });
+  }
+
   private async runColdPath(frame: TelemetryFrame) {
     const now = Date.now();
     if (now - this.lastColdTime < this.coldCooldownMs) return;
@@ -573,34 +604,8 @@ export class CoachingService {
     // On fetch failure we reset to 0 below so offline → back-online recovers quickly
     // instead of silently burning a 15–20s window per failure.
     this.lastColdTime = now;
-    const coach = this.getCoach();
 
-    const cornerName = this.lastCorner?.name || 'straight';
-    const cornerAdvice = this.lastCorner?.advice || '';
-
-    const skillLevel = this.driverModel.getSkillLevel();
-    let instruction: string;
-    switch (skillLevel) {
-      case 'BEGINNER':
-        instruction = 'Give ONE simple instruction using feel-based language. No jargon. Under 10 words. Sound like a patient driving instructor.';
-        break;
-      case 'ADVANCED':
-        instruction = 'Give a data-driven analysis referencing the telemetry numbers. Be concise. Under 15 words.';
-        break;
-      default:
-        instruction = 'Give a technique instruction with a brief physics explanation. Under 20 words.';
-    }
-
-    const prompt = `${coach.systemPrompt}
-
-${RACING_PHYSICS_KNOWLEDGE}
-
-Current Telemetry:
-Speed: ${frame.speed.toFixed(1)} mph | Brake: ${frame.brake.toFixed(0)}% | Throttle: ${frame.throttle.toFixed(0)}%
-G-Lat: ${frame.gLat.toFixed(2)} | G-Long: ${frame.gLong.toFixed(2)}
-Location: ${cornerName} - ${cornerAdvice}
-
-${instruction}`;
+    const prompt = this.buildColdPromptForCurrentState(frame);
 
     try {
       const res = await fetch(
