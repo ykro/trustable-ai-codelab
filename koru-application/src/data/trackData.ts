@@ -33,3 +33,54 @@ export const THUNDERHILL_EAST: Track = {
     { x: -197.4, y: 279.9 }, { x: -114.1, y: -94.9 }, { x: -19.7, y: -375.5 },
   ],
 };
+
+/**
+ * Sonoma Raceway — production track data for the May 23 field test.
+ * Vision cues (`visualReference`) on T1, T7, T10, T11 reflect the reviewer's
+ * Apr 29 feedback: beginner drivers brake to landmarks, not numbers.
+ * T10's "bridge" cue was specifically called out by the reviewer.
+ *
+ * Lat/lon for T2, T3, T7, T11 are taken from the test fixture; T1 and T10
+ * use the same approximate coordinates pending a survey lap with RaceBox
+ * data (see TODOs).
+ */
+export const SONOMA_RACEWAY: Track = {
+  name: 'Sonoma Raceway',
+  length: 3700,
+  recordLap: 97.5,
+  center: { lat: 38.161, lng: -122.455 },
+  zoom: 15,
+  sectors: [
+    { id: 1, name: 'Sector 1', startDist: 0, endDist: 1200 },
+    { id: 2, name: 'Sector 2', startDist: 1200, endDist: 2400 },
+    { id: 3, name: 'Sector 3', startDist: 2400, endDist: 3700 },
+  ],
+  corners: [
+    { id: 1, name: 'Turn 1', entryDist: 100, apexDist: 150, exitDist: 200,
+      lat: 38.16180, lon: -122.45550, advice: 'Hard brake, late apex',
+      entryLat: 38.16200, entryLon: -122.45500, targetSpeed: 55,
+      visualReference: 'Brake at the 3 board, turn in at the cone on the right.' },
+    { id: 2, name: 'Turn 2', entryDist: 350, apexDist: 420, exitDist: 480,
+      lat: 38.16120, lon: -122.45680, advice: 'Carry speed, gentle arc',
+      entryLat: 38.16150, entryLon: -122.45620, targetSpeed: 70 },
+    { id: 3, name: 'Turn 3', entryDist: 600, apexDist: 650, exitDist: 700,
+      lat: 38.16050, lon: -122.45750, advice: 'Downhill entry, threshold brake',
+      entryLat: 38.16080, entryLon: -122.45720, targetSpeed: 45 },
+    // TODO: add lat/lon for T4, T5, T6 from a Sonoma survey lap.
+    { id: 7, name: 'Turn 7', entryDist: 1800, apexDist: 1870, exitDist: 1930,
+      lat: 38.15950, lon: -122.45400, advice: 'Fast sweeper, commit to throttle',
+      entryLat: 38.15970, entryLon: -122.45430, targetSpeed: 85,
+      visualReference: 'Sight the exit kerb early — feet stay planted through the sweeper.' },
+    // TODO: add lat/lon for T8, T9 from a Sonoma survey lap.
+    { id: 10, name: 'Turn 10', entryDist: 2800, apexDist: 2870, exitDist: 2950,
+      // TODO: replace with surveyed lat/lon — current values are approximate.
+      lat: 38.16020, lon: -122.45350, advice: 'Late apex, set up for the carousel',
+      targetSpeed: 50,
+      visualReference: 'Brake when the bridge fills your windshield.' },
+    { id: 11, name: 'Turn 11', entryDist: 3200, apexDist: 3280, exitDist: 3350,
+      lat: 38.16100, lon: -122.45300, advice: 'Final corner, strong exit onto straight',
+      entryLat: 38.16120, entryLon: -122.45330, targetSpeed: 60,
+      visualReference: 'Aim at the start/finish tower — straighten the wheel as it grows.' },
+  ],
+  mapPoints: [],
+};
