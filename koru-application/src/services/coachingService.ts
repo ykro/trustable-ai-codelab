@@ -142,6 +142,14 @@ export class CoachingService {
   /** Per-call wall-clock samples; bounded ring buffer to avoid unbounded growth. */
   private humanizationLatencySamples: number[] = [];
   private static readonly LATENCY_SAMPLE_CAP = 2000;
+
+  // ── B5: Full processFrame HOT-path latency tracking ─────
+  /** Per-frame wall-clock samples covering the SYNCHRONOUS portion of
+   *  processFrame (entry → just before the async cold-path dispatch). This is
+   *  the real HOT-path budget the reviewer asked for (≤50ms). It is strictly
+   *  separate from `humanizationLatencySamples`, which only times the
+   *  humanizeAction call — humanization is one component of processFrame. */
+  private processFrameLatencySamples: number[] = [];
   /** Sticky for ONE emission after a budget breach: next hot-path emission
    *  uses the raw action label, then this resets. Single-frame stickiness keeps
    *  the recovery cheap without permanently degrading coaching quality. */
@@ -209,6 +217,32 @@ export class CoachingService {
     this.humanizationBreachWindow = [];
     this.humanizationBreachCount = 0;
     this.humanizationFallbackArmed = false;
+  }
+
+  // ── B5 public API: full processFrame HOT-path latency stats ───
+  /** Stats over the synchronous portion of processFrame (the HOT path).
+   *  Returns zeros + count:0 when the buffer is empty (e.g. before any
+   *  frame has been processed) so callers don't need to special-case it. */
+  getProcessFrameLatencyStats(): { mean: number; p50: number; p99: number; max: number; count: number } {
+    const s = this.processFrameLatencySamples;
+    const count = s.length;
+    if (count === 0) return { mean: 0, p50: 0, p99: 0, max: 0, count: 0 };
+    // Sort a copy — we don't want to disturb insertion order in the live buffer.
+    const sorted = s.slice().sort((a, b) => a - b);
+    const sum = sorted.reduce((a, b) => a + b, 0);
+    return {
+      mean: sum / count,
+      p50: sorted[Math.floor(count * 0.5)],
+      p99: sorted[Math.min(count - 1, Math.floor(count * 0.99))],
+      max: sorted[count - 1],
+      count,
+    };
+  }
+
+  /** Clears the processFrame latency ring buffer. Independent from the
+   *  humanization buffer — they are two different measurements. */
+  resetProcessFrameLatencyStats(): void {
+    this.processFrameLatencySamples = [];
   }
 
   /**
@@ -348,6 +382,10 @@ export class CoachingService {
 
   /** Called on every telemetry frame */
   processFrame(frame: TelemetryFrame) {
+    // B5: time the SYNCHRONOUS HOT path (entry → just before async cold dispatch).
+    // Reviewer's budget is ≤50ms HOT path total — humanization alone isn't enough.
+    const hotPathStart = performance.now();
+
     // Maintain rolling window for COLD prompt builder (DR-4).
     this.coldFrameWindow.push(frame);
     if (this.coldFrameWindow.length > CoachingService.COLD_WINDOW_FRAMES) {
@@ -380,6 +418,15 @@ export class CoachingService {
     this.checkCognitiveOverload(frame);
     this.checkHustle(frame);
     this.runFeedforward(frame);
+
+    // B5: stop measurement here — runColdPath is fire-and-forget async.
+    // Anything async after this point is NOT on the HOT-path budget.
+    const hotPathElapsed = performance.now() - hotPathStart;
+    if (this.processFrameLatencySamples.length >= CoachingService.LATENCY_SAMPLE_CAP) {
+      this.processFrameLatencySamples.shift();
+    }
+    this.processFrameLatencySamples.push(hotPathElapsed);
+
     void this.runColdPath(frame);
 
     // Drain queue — deliver highest-priority message if timing allows
