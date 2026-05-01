@@ -9,6 +9,7 @@ import {
   getTriggerDistance,
   buildFeedforwardText,
 } from '../coachingService';
+import { SONOMA_TEST_TRACK } from '../../__tests__/fixtures/sonomaTrackData';
 import type { CoachingDecision, TelemetryFrame, Corner, Track } from '../../types';
 
 // ── Helpers ────────────────────────────────────────────────
@@ -247,6 +248,24 @@ describe('DR-5 FEEDFORWARD message — vision cue integration', () => {
     expect(ff).toBeDefined();
     expect(ff!.text).toContain('Eyes up to the bridge tire mark');
     expect(ff!.text).toContain('Stay committed through the kink');
+  });
+
+  // Audit P1: T1 must have a visualReference. T1 is the most consequential
+  // braking zone for a beginner at Sonoma, so the eyes-up cue is required.
+  // Parametrized over the Sonoma corners that ship with a vision cue.
+  describe.each([
+    { id: 1,  name: 'Turn 1' },
+    { id: 7,  name: 'Turn 7' },
+    { id: 10, name: 'Turn 10' },
+    { id: 11, name: 'Turn 11' },
+  ])('SONOMA_TEST_TRACK $name has a visualReference', ({ id, name }) => {
+    it(`Corner id=${id} (${name}) defines a non-empty visualReference`, () => {
+      const corner = SONOMA_TEST_TRACK.corners.find(c => c.id === id);
+      expect(corner, `Corner id=${id} missing from fixture`).toBeDefined();
+      expect(corner!.name).toBe(name);
+      expect(corner!.visualReference).toBeDefined();
+      expect(corner!.visualReference!.trim().length).toBeGreaterThan(0);
+    });
   });
 
   it('emits the unchanged pedal/wheel message for corners without visualReference', () => {
