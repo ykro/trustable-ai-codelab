@@ -43,8 +43,14 @@ export interface PhysicsContext {
   currentCombinedG: number;
   /** Friction-circle utilization, 0..>1, vs assumed 1.4G street-tire grip limit. */
   frictionCircleUtilization: number;
-  /** d(brake)/dt averaged over the brake-release portion of the window, %/sec. Negative = releasing. */
+  /** d(brake)/dt averaged over the brake-release portion of the window, %/sec. Negative = releasing.
+   *  Only meaningful when `brakeReleasedInWindow` is true; otherwise the window ended with the
+   *  driver still on the brakes and no release was captured. */
   brakeReleaseRate: number;
+  /** True iff the window contained at least one post-peak frame with brake < 5 — i.e. the
+   *  driver actually released the brake within the observation window. When false, the window
+   *  ended mid-application; `brakeReleaseRate` should NOT be interpreted as "released smoothly". */
+  brakeReleasedInWindow: boolean;
   /** d(throttle)/dt averaged over the throttle-application portion of the window, %/sec. */
   throttleApplicationRate: number;
   /** Speed delta (mph) across the window — positive = accelerating. */
@@ -66,6 +72,7 @@ export function computePhysicsContext(frames: TelemetryFrame[]): PhysicsContext 
       currentCombinedG: 0,
       frictionCircleUtilization: 0,
       brakeReleaseRate: 0,
+      brakeReleasedInWindow: false,
       throttleApplicationRate: 0,
       speedDelta: 0,
       atFrictionLimit: false,
@@ -109,7 +116,14 @@ export function computePhysicsContext(frames: TelemetryFrame[]): PhysicsContext 
 
   // Brake-release rate: from the peak-brake sample to the last brake-active sample.
   // Negative number = releasing. If brake never engaged, rate = 0.
+  //
+  // B4 framing fix: explicitly track whether the driver actually released the brake
+  // within the window. If not (e.g. window ends still on the brakes), a near-zero
+  // rate is misleading — the LLM would read it as "released smoothly" when the
+  // truth is "no release captured." We expose `brakeReleasedInWindow` so the
+  // prompt renderer can suppress the misleading numeric and label the case.
   let brakeReleaseRate = 0;
+  let brakeReleasedInWindow = false;
   if (brakeStartIdx !== -1 && brakeEndIdx > brakeStartIdx) {
     // Use the LAST occurrence of peak brake so the release-rate window
     // measures only the actual release portion, not the held-peak portion.
@@ -117,17 +131,26 @@ export function computePhysicsContext(frames: TelemetryFrame[]): PhysicsContext 
     for (let i = brakeStartIdx; i <= brakeEndIdx; i++) {
       if (frames[i].brake >= frames[peakIdx].brake) peakIdx = i;
     }
-    // Tail: prefer the first sample after peak that drops to ~0 (the end of
-    // the release), even if it falls below the brake>5 active threshold.
-    let tailIdx = brakeEndIdx;
+    // Did any post-peak frame actually drop below the active threshold (i.e.
+    // did the driver release within the window)?
     for (let i = peakIdx + 1; i < frames.length; i++) {
-      tailIdx = i;
-      if (frames[i].brake < 5) break;
+      if (frames[i].brake < 5) { brakeReleasedInWindow = true; break; }
     }
-    const dt = frames[tailIdx].time - frames[peakIdx].time;
-    if (dt > 0) {
-      brakeReleaseRate = (frames[tailIdx].brake - frames[peakIdx].brake) / dt;
+    if (brakeReleasedInWindow) {
+      // Tail: prefer the first sample after peak that drops to ~0 (the end of
+      // the release), even if it falls below the brake>5 active threshold.
+      let tailIdx = brakeEndIdx;
+      for (let i = peakIdx + 1; i < frames.length; i++) {
+        tailIdx = i;
+        if (frames[i].brake < 5) break;
+      }
+      const dt = frames[tailIdx].time - frames[peakIdx].time;
+      if (dt > 0) {
+        brakeReleaseRate = (frames[tailIdx].brake - frames[peakIdx].brake) / dt;
+      }
     }
+    // else: no release captured. Leave brakeReleaseRate at 0; renderer
+    // will substitute a "no release captured" line instead of "0.0 %/s".
   }
 
   // Throttle-application rate: rising edge from start of throttle window to peak.
@@ -151,6 +174,7 @@ export function computePhysicsContext(frames: TelemetryFrame[]): PhysicsContext 
     currentCombinedG: currentCombined,
     frictionCircleUtilization: peakCombined / FRICTION_LIMIT_G,
     brakeReleaseRate,
+    brakeReleasedInWindow,
     throttleApplicationRate,
     speedDelta: last.speed - first.speed,
     atFrictionLimit: atLimit,
@@ -200,9 +224,11 @@ Phase: ${cornerPhase}`
 - Friction-circle utilization: ${(physics.frictionCircleUtilization * 100).toFixed(0)}% of ${FRICTION_LIMIT_G}G limit${
     physics.atFrictionLimit ? ' (AT LIMIT)' : ''
   }
-- Brake release rate (d(brake)/dt from peak): ${physics.brakeReleaseRate.toFixed(1)} %/s${
-    physics.brakeReleaseRate < -200 ? ' (ABRUPT — unloads front tires)' : ''
-  }
+- ${physics.brakeReleasedInWindow
+    ? `Brake release rate (d(brake)/dt from peak): ${physics.brakeReleaseRate.toFixed(1)} %/s${
+        physics.brakeReleaseRate < -200 ? ' (ABRUPT — unloads front tires)' : ''
+      }`
+    : 'Brake release rate: brake still applied at end of window (no release captured)'}
 - Throttle application rate (d(throttle)/dt rising): ${physics.throttleApplicationRate.toFixed(1)} %/s
 - Speed delta over window: ${physics.speedDelta >= 0 ? '+' : ''}${physics.speedDelta.toFixed(1)} mph`;
 

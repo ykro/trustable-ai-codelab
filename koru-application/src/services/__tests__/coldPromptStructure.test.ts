@@ -201,6 +201,67 @@ describe('buildColdPrompt — covers known scenarios', () => {
   });
 });
 
+/** B4: a window where the driver is still on the brakes at the end — never
+ *  released within the observation window. brake stays > 5 the entire time.
+ *  The old code reported brakeReleaseRate ~ 0 here, which the LLM read as
+ *  "released smoothly." That's wrong — the right answer is "no release captured." */
+function brakeNotReleasedFrames(): TelemetryFrame[] {
+  const out: TelemetryFrame[] = [];
+  // Heavy braking from start to end of window — peak holds, never released.
+  for (let i = 0; i < 25; i++) {
+    out.push(frame({
+      speed: 95 - i * 0.5,
+      brake: 80 + (i % 3),  // wobbles 80..82, never < 5
+      throttle: 0,
+      gLong: -1.0,
+      gLat: 0.05,
+    }, i * 0.04));
+  }
+  return out;
+}
+
+describe('computePhysicsContext — B4 brake-released-in-window flag', () => {
+  it('flags brakeReleasedInWindow=true when a post-peak frame drops below active threshold', () => {
+    const p = computePhysicsContext(missedApexFrames());
+    expect(p.brakeReleasedInWindow).toBe(true);
+    expect(p.brakeReleaseRate).toBeLessThan(-200);
+  });
+
+  it('flags brakeReleasedInWindow=false when window ends still on the brakes', () => {
+    const p = computePhysicsContext(brakeNotReleasedFrames());
+    expect(p.brakeReleasedInWindow).toBe(false);
+    // Numeric rate is meaningless here — the renderer should not use it.
+    // We only assert it's finite (no NaN) so downstream consumers don't crash.
+    expect(Number.isFinite(p.brakeReleaseRate)).toBe(true);
+  });
+
+  it('flags brakeReleasedInWindow=false when brake never engaged', () => {
+    const p = computePhysicsContext([
+      frame({ brake: 0, throttle: 100, gLong: 0.3 }, 0),
+      frame({ brake: 0, throttle: 100, gLong: 0.3 }, 0.04),
+    ]);
+    expect(p.brakeReleasedInWindow).toBe(false);
+    expect(p.brakeReleaseRate).toBe(0);
+  });
+});
+
+describe('buildColdPrompt — B4 no-release rendering', () => {
+  it('substitutes a "no release captured" line when window ends still on the brakes', () => {
+    const prompt = buildColdPrompt(ctxFor(brakeNotReleasedFrames()));
+    expect(prompt).toMatch(/no release captured/);
+    expect(prompt).toMatch(/brake still applied at end of window/);
+    // Critically, the misleading numeric form must NOT appear for this scenario.
+    expect(prompt).not.toMatch(/Brake release rate \(d\(brake\)\/dt from peak\):\s*-?0\.0\s*%\/s/);
+    expect(prompt).not.toMatch(/Brake release rate \(d\(brake\)\/dt from peak\):/);
+  });
+
+  it('keeps the numeric brake-release form when release IS captured', () => {
+    const prompt = buildColdPrompt(ctxFor(missedApexFrames()));
+    expect(prompt).toMatch(/Brake release rate \(d\(brake\)\/dt from peak\):\s*-?\d+\.\d\s*%\/s/);
+    expect(prompt).not.toMatch(/no release captured/);
+  });
+});
+
 describe('computePhysicsContext', () => {
   it('detects abrupt brake release in missed-apex scenario', () => {
     const p = computePhysicsContext(missedApexFrames());
