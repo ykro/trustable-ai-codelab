@@ -155,27 +155,13 @@ describe('FEEDFORWARD time-to-corner cognitive headroom', () => {
   });
 
   /**
-   * SKIPPED — DOCUMENTS A REAL BUG.
+   * Resolved by DR-1 dynamic geofence + B3 MAX_TRIGGER_M cap. At 90 mph
+   * the velocity-scaled trigger gives 181m of distance and ≥ 4.4s of
+   * headroom (4.5s formula minus ~100ms frame-step discretization).
    *
-   * Finding: at 90 mph (40.2 m/s) the 150m geofence yields only ~3.7s of
-   * headroom, below the DR-1 ≥ 4.5s high-speed guarantee.
-   *
-   * Recommended fix (NOT done here; tests-only PR per work brief):
-   *   In coachingService.findNearestCorner, replace the constant 150m radius
-   *   with a speed-aware threshold, e.g.:
-   *     const radius = Math.max(150, currentSpeedMps * 5.0);
-   *   That gives a flat 5s of cognitive runway at any speed (and falls back
-   *   to 150m below ~67 mph). The fire decision needs the current frame's
-   *   speed so the signature has to grow — minor refactor. Owner: whichever
-   *   agent is doing coachingService production fixes in parallel.
-   *
-   * Secondary finding (also for the prod-fix agent): when corners cluster
-   * within ~150m of each other along a realistic approach path (e.g. Sonoma
-   * T1/T2/T3), the second corner's geofence fires only once it becomes
-   * geometrically CLOSER than the first — typically under 100m — collapsing
-   * the time-to-corner well below 3s even at 60 mph. That's a separate
-   * concern from the radius bound and would need either heading-aware
-   * dispatch or a "next corner ahead" predicate rather than nearest-corner.
+   * The clustered-corner concern noted previously was also fixed — see
+   * `coachingService.clusteredCorners.test.ts` for the heading-aware
+   * "next corner ahead" predicate that resolved it.
    */
   it('fires with ≥ 4.5 s headroom at 90 mph (now passes — dynamic geofence resolved)', () => {
     const mph = 90;

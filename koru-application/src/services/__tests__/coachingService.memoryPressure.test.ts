@@ -12,9 +12,11 @@ import type { TelemetryFrame } from '../../types';
  * call and asserting that p99 stays below the 50 ms HOT-path budget and that
  * max latency is no worse than 3x the control case.
  *
- * NOTE: `getProcessFrameLatencyStats()` (the planned "B5" stats method) does
- * not exist on CoachingService yet. We measure with `performance.now()`
- * directly around `processFrame()` per the task instructions.
+ * Note: we measure with `performance.now()` directly around `processFrame()`
+ * here. The production B5 stats method (`getProcessFrameLatencyStats()`) is
+ * available and used elsewhere; this test was authored before B5 landed and
+ * the external measurement is fine as a peer benchmark — a regression in B5
+ * vs external numbers would surface as a delta in the next CI run.
  */
 describe('CoachingService HOT path under memory pressure', () => {
   function makeFrame(i: number): TelemetryFrame {

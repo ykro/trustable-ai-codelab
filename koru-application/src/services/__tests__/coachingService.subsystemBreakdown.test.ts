@@ -115,16 +115,11 @@ describe('CoachingService HOT path subsystem breakdown', () => {
         }
         decisionSamples.push(performance.now() - decStart);
 
-        // Time the humanizeAction call site externally via a probe action.
-        // We can't reach the private method directly, so we measure the
-        // closest analogue: the timing-gate / driver-model-derived persona
-        // computation that humanize relies on. Use getCoach() + getDriverState()
-        // as a cheap proxy — both are called inside humanize.
-        const humStart = performance.now();
-        service.getCoach();
-        service.getDriverState();
-        humanizeSamples.push(performance.now() - humStart);
-
+        // Humanization is timed inside processFrame (DR-3 instrumentation
+        // exposes the per-call samples via getHumanizationLatencySamples).
+        // We pull the real numbers AFTER the frame runs — measuring at the
+        // call site of public getters here was a false proxy that just
+        // measured O(1) Map lookups.
         const totStart = performance.now();
         service.processFrame(frame);
         totalSamples.push(performance.now() - totStart);
@@ -143,11 +138,15 @@ describe('CoachingService HOT path subsystem breakdown', () => {
       max: arr.length ? Math.max(...arr) : 0,
     });
 
+    // Pull humanization timings from the production ring buffer (DR-3).
+    const humSamples = service.getHumanizationLatencySamples().slice();
+    humanizeSamples.push(...humSamples);
+
     const dm = summary('DriverModel.update', driverSamples);
     const cpd = summary('CornerPhaseDetector.detect', cornerSamples);
     const dec = summary('DecisionMatrix.scan', decisionSamples);
     const cq = summary('CoachingQueue.enqueue', queueSamples);
-    const hum = summary('humanize-proxy', humanizeSamples);
+    const hum = summary('humanizeAction (real)', humanizeSamples);
     const tot = summary('processFrame.total', totalSamples);
 
     // Surface the breakdown so a regression has a fingerprint.

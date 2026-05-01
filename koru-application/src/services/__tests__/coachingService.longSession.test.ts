@@ -12,12 +12,12 @@ import type { TelemetryFrame } from '../../types';
  *   - p99 latency in the last 10k frames is no worse than p99 in the first
  *     10k frames (no progressive slowdown).
  *
- * Also probes for unbounded ring buffers: if a `humanizationLatencySamples`
- * or `processFrameLatencySamples` field is exposed on the service and grows
- * past ~2000 entries, that's the bug. As of Wave 2A the service does not
- * expose these fields at all (no `getProcessFrameLatencyStats()` method),
- * so we record that observation and skip the ring-buffer assertion rather
- * than fabricate one.
+ * Also probes for unbounded ring buffer growth. Both `humanizationLatencySamples`
+ * and `processFrameLatencySamples` cap at LATENCY_SAMPLE_CAP = 2000 with a
+ * circular-buffer push (no O(N) shift on each insert). The test reads
+ * `getHumanizationLatencySamples()` and `getProcessFrameLatencyStats().count`
+ * after the 90k-frame run and asserts neither has grown past the cap +
+ * margin.
  */
 describe('CoachingService long-session stability', () => {
   function makeFrame(i: number): TelemetryFrame {

@@ -40,7 +40,15 @@ const SAFETY_OVERRIDE_TEXT: Partial<Record<CoachAction, string>> = {
 };
 
 /** Map actions to priority levels (module-level Map avoids per-call array allocations).
- *  Safety bypass is determined by `priority === 0` at the call site, not by a separate set. */
+ *  Safety bypass is determined by `priority === 0` at the call site, not by a separate set.
+ *
+ *  THRESHOLD asymmetry note: THRESHOLD is intentionally NOT in this map. It
+ *  defaults to P1 via the `?? 1` fallback below. THRESHOLD only escalates to
+ *  P0 dynamically when the DR-6 safety override fires (speed > 70 mph and
+ *  action ∈ BRAKE_CLASS_ACTIONS). Adding `['THRESHOLD', 0]` here would make
+ *  it always P0 regardless of speed — over-aggressive. Adding `['THRESHOLD',
+ *  1]` would be redundant with the default. The asymmetry is load-bearing;
+ *  do not "fix" it without changing the override path too. */
 const ACTION_PRIORITY: Map<string, 0 | 1 | 2 | 3> = new Map([
   ['OVERSTEER_RECOVERY', 0], ['BRAKE', 0],
   ['EARLY_THROTTLE', 1], ['LIFT_MID_CORNER', 1], ['SPIKE_BRAKE', 1],
@@ -247,6 +255,7 @@ export class CoachingService {
    *  humanization buffer — they are two different measurements. */
   resetProcessFrameLatencyStats(): void {
     this.processFrameLatencySamples = [];
+    this.latencyBufferHead.processFrame = 0;
   }
 
   /**
@@ -288,11 +297,9 @@ export class CoachingService {
     const text = this.humanizeAction(action, frame);
     const elapsed = performance.now() - start;
 
-    // Bounded ring buffer — drop oldest when capped.
-    if (this.humanizationLatencySamples.length >= CoachingService.LATENCY_SAMPLE_CAP) {
-      this.humanizationLatencySamples.shift();
-    }
-    this.humanizationLatencySamples.push(elapsed);
+    // O(1) circular buffer push — shift() is O(N) and would be measurable
+    // when called at 25Hz on a Pixel 10 with cap 2000.
+    this.pushLatencySample(this.humanizationLatencySamples, elapsed);
 
     const breached = elapsed > this.humanizationBudgetMs;
     if (breached) {
@@ -423,18 +430,40 @@ export class CoachingService {
     this.checkHustle(frame);
     this.runFeedforward(frame);
 
-    // B5: stop measurement here — runColdPath is fire-and-forget async.
-    // Anything async after this point is NOT on the HOT-path budget.
-    const hotPathElapsed = performance.now() - hotPathStart;
-    if (this.processFrameLatencySamples.length >= CoachingService.LATENCY_SAMPLE_CAP) {
-      this.processFrameLatencySamples.shift();
-    }
-    this.processFrameLatencySamples.push(hotPathElapsed);
-
+    // Cold path is fire-and-forget; only the synchronous portion (up to its
+    // first await) counts toward the HOT budget.
     void this.runColdPath(frame);
 
-    // Drain queue — deliver highest-priority message if timing allows
+    // Drain queue — deliver highest-priority message if timing allows.
+    // listener callbacks fire synchronously inside drainQueue → emit().
     this.drainQueue();
+
+    // B5: stop measurement AFTER drainQueue so listener-callback cost is
+    // included in the HOT-path budget. The reviewer asked for ≤50ms total
+    // HOT path; if a listener does heavy synchronous TTS dispatch work,
+    // that *is* on the HOT path even though it logically follows emission.
+    // Anything truly async (the awaited fetch inside runColdPath) is excluded.
+    const hotPathElapsed = performance.now() - hotPathStart;
+    this.pushLatencySample(this.processFrameLatencySamples, hotPathElapsed);
+  }
+
+  /** O(1) bounded ring-buffer push.
+   *  `Array.shift()` is O(N) at 25Hz over 2000 samples — measurable on a
+   *  Pixel 10 PWA. Use circular semantics: when full, overwrite the oldest
+   *  slot via head index. We expose the buffer as a flat array via the public
+   *  stats getter, which is read-rarely; that copy is O(N) but only when
+   *  someone actually inspects stats. */
+  private latencyBufferHead = { processFrame: 0, humanization: 0 };
+  private pushLatencySample(buf: number[], v: number): void {
+    const cap = CoachingService.LATENCY_SAMPLE_CAP;
+    const isProcess = buf === this.processFrameLatencySamples;
+    const headKey = isProcess ? 'processFrame' : 'humanization';
+    if (buf.length < cap) {
+      buf.push(v);
+    } else {
+      buf[this.latencyBufferHead[headKey]] = v;
+      this.latencyBufferHead[headKey] = (this.latencyBufferHead[headKey] + 1) % cap;
+    }
   }
 
   private drainQueue(): void {

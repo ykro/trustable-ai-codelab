@@ -111,12 +111,13 @@ describe('CoachingService listener fan-out', () => {
       }
     }).not.toThrow();
 
-    // The late listener should have observed at least zero invocations
-    // (we don't assert > 0 because emit only fires when the queue drains;
-    // many frames produce no decision). Crucial check is no exception and
-    // that unsubscribe ran cleanly.
+    // The late listener was subscribed for at most 200 frames (500 → 700).
+    // Even if emit() fired on every one of those, the count cannot exceed 200.
+    // After unsubscribe at 700, no further invocations should land. This
+    // bounds the value above (proving unsubscribe took effect) instead of
+    // below (which would be vacuous — every integer is ≥ 0).
     // eslint-disable-next-line no-console
     console.log(`[fanOut] late listener invocations between frames 500-700: ${lateCount}`);
-    expect(lateCount).toBeGreaterThanOrEqual(0);
+    expect(lateCount).toBeLessThanOrEqual(200);
   });
 });
