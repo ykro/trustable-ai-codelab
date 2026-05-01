@@ -1,6 +1,6 @@
 import type { TelemetryFrame, CoachAction, Corner, Track, CoachingDecision, CornerPhase, SessionGoal } from '../types';
 import { COACHES, DEFAULT_COACH, DECISION_MATRIX, RACING_PHYSICS_KNOWLEDGE } from '../utils/coachingKnowledge';
-import { haversineDistance, isValidGps } from '../utils/geoUtils';
+import { haversineDistance, isValidGps, calculateHeading } from '../utils/geoUtils';
 import { CornerPhaseDetector } from './cornerPhaseDetector';
 import { TimingGate } from './timingGate';
 import { CoachingQueue } from './coachingQueue';
@@ -111,6 +111,9 @@ export class CoachingService {
   private lastColdTime = 0;
   private lastHotAction: CoachAction | null = null;
   private lastCorner: Corner | null = null;
+  // Previous-frame GPS, used to derive heading for the heading-aware feedforward
+  // predicate. Reset on setTrack so a fresh session can't reuse a stale heading.
+  private lastFeedforwardGps: { lat: number; lon: number } | null = null;
   private coldCooldownMs = 15000;
   private apiKey: string | null = null;
 
@@ -189,6 +192,7 @@ export class CoachingService {
     // Drop the stale corner reference so the feedforward path doesn't compare
     // a fresh corner against a stale identity from the previous track.
     this.lastCorner = null;
+    this.lastFeedforwardGps = null;
   }
 
   getTimingState() { return this.timingGate.getState(); }
@@ -910,8 +914,24 @@ export class CoachingService {
     // path does not fire when the car is stationary (e.g. paddock, pre-grid).
     const triggerDistance = getTriggerDistance(frame.speed);
     if (triggerDistance <= 0) return;
+
+    // Derive heading from the previous valid GPS sample. If unavailable (first
+    // frame, GPS dropout, or essentially-stationary), heading is null and we
+    // fall back to nearest-only inside findNearestCornerWithinTriggerDistance.
+    const prev = this.lastFeedforwardGps;
+    let heading: number | null = null;
+    if (prev) {
+      // Require at least 0.5m of movement to derive a stable heading. Below
+      // that, GPS noise dominates and the bearing is meaningless.
+      const moved = haversineDistance(prev.lat, prev.lon, frame.latitude, frame.longitude);
+      if (moved >= 0.5) {
+        heading = calculateHeading(prev.lat, prev.lon, frame.latitude, frame.longitude);
+      }
+    }
+    this.lastFeedforwardGps = { lat: frame.latitude, lon: frame.longitude };
+
     const nearest = this.findNearestCornerWithinTriggerDistance(
-      frame.latitude, frame.longitude, this.track.corners, triggerDistance,
+      frame.latitude, frame.longitude, this.track.corners, triggerDistance, heading,
     );
 
     if (nearest && nearest !== this.lastCorner) {
@@ -927,20 +947,36 @@ export class CoachingService {
     }
   }
 
-  /** Pick the geometrically closest corner within `triggerDistance` metres.
-   *  At Sonoma's T2/T3 complex two corner geofences can overlap; returning the
-   *  actually-closest avoids array-order determining which advice fires. */
+  /** Pick the geometrically closest corner within `triggerDistance` metres,
+   *  with a heading-aware "ahead of the driver" filter when heading is known.
+   *  At Sonoma's T1/T2/T3 complex the geofences cluster along a single
+   *  approach line, and a pure nearest-wins picker only latches onto the next
+   *  corner after the driver crosses the C1↔C2 midpoint — collapsing
+   *  time-to-corner well below DR-1's 3.0s budget. Rejecting corners ≥ 90°
+   *  behind the driver fixes that.
+   *
+   *  Fallback: when `heading` is null (no GPS history, stationary, or
+   *  sub-0.5m movement), we use the original nearest-only behavior so fresh
+   *  sessions still fire FEEDFORWARD on the first frame after track load. */
   private findNearestCornerWithinTriggerDistance(
-    lat: number, lon: number, corners: Corner[], triggerDistance: number,
+    lat: number, lon: number, corners: Corner[], triggerDistance: number, heading: number | null,
   ): Corner | null {
     let nearest: Corner | null = null;
     let minDist = triggerDistance;
     for (const c of corners) {
       const dist = haversineDistance(lat, lon, c.lat, c.lon);
-      if (dist < minDist) {
-        minDist = dist;
-        nearest = c;
+      if (dist >= minDist) continue;
+      // Heading-aware rejection: if we know which way the driver is facing,
+      // skip corners ≥ 90° behind. 90° is the simplest correct cutoff —
+      // anything further forward than perpendicular counts as "ahead".
+      if (heading !== null) {
+        const bearing = calculateHeading(lat, lon, c.lat, c.lon);
+        let diff = Math.abs(bearing - heading) % 360;
+        if (diff > 180) diff = 360 - diff;
+        if (diff >= 90) continue;
       }
+      minDist = dist;
+      nearest = c;
     }
     return nearest;
   }

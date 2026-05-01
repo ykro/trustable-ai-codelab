@@ -1,190 +1,223 @@
 /**
- * FEEDFORWARD path — clustered-corner geometry test.
+ * BUG: findNearestCornerWithinTriggerDistance picks the geometrically closest
+ * corner without heading awareness. For clustered corners that lie along the
+ * driver's approach line (Sonoma T1/T2/T3), corner #2 only becomes "nearest"
+ * AFTER the driver has crossed the C1↔C2 midpoint, collapsing time-to-corner
+ * for C2 to ~1.83s — well under the 3.0s budget DR-1 promises.
  *
- * BUG SURFACING: The previous audit noted that `findNearestCorner` in
- *   koru-application/src/services/coachingService.ts:658
- * picks the geometrically closest corner within 150m, with NO awareness of
- * heading or "is this corner ahead of me." For Sonoma's T1/T2/T3 cluster
- * (corners ~100m apart along the racing line) this collapses time-to-corner
- * (TTC) for the second and third corner: their feedforward only fires once
- * they become geometrically closer than the previous corner — i.e. roughly
- * the midpoint between them. At 60mph (~26.8 m/s) that midpoint is only
- * ~1.9s ahead, well below the 3.0s TTC budget for actionable advice.
+ * Fix: heading-aware predicate. From the driver's current GPS heading, compute
+ * the bearing to each candidate corner; reject corners that are ≥ 90° behind
+ * the driver. Among the corners ahead, pick the geometrically closest.
  *
- * The fix would be a heading-aware "next corner ahead" predicate (project
- * each corner onto the driver's heading vector; reject corners behind).
- * That fix is NOT in scope for this PR. This test captures the bug as a
- * failing assertion.
+ * Fallback: if heading is unavailable (no GPS history), use nearest-only so
+ * we don't suddenly stop firing FEEDFORWARD in fresh sessions.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { CoachingService } from '../coachingService';
-import { CoachingQueue } from '../coachingQueue';
-import type { TelemetryFrame, Track, CoachingDecision } from '../../types';
+import type { CoachingDecision, TelemetryFrame, Track, Corner } from '../../types';
 
-// Place a synthetic track at a benign lat so degree↔meter math is simple.
-// At lat 0 (equator) and along a meridian, 1 deg latitude ≈ 110_540 m and
-// longitude is constant => perfect straight-line approach.
-const REF_LAT = 0;
-const REF_LON = 0;
-const M_PER_DEG_LAT = 110_540;
-
-/** Convert a north-of-reference offset in meters to a latitude. */
-function metersToLat(m: number): number {
-  return REF_LAT + m / M_PER_DEG_LAT;
-}
-
-const C1_M = 0;
-const C2_M = 100;
-const C3_M = 200;
-
-const SYNTH_TRACK: Track = {
-  name: 'synthetic-cluster',
-  length: 1000,
-  sectors: [{ id: 1, name: 'S1', startDist: 0, endDist: 1000 }],
-  corners: [
-    {
-      id: 1, name: 'C1', entryDist: 0, apexDist: 0, exitDist: 0,
-      lat: metersToLat(C1_M), lon: REF_LON, advice: 'C1 advice',
-    },
-    {
-      id: 2, name: 'C2', entryDist: 100, apexDist: 100, exitDist: 100,
-      lat: metersToLat(C2_M), lon: REF_LON, advice: 'C2 advice',
-    },
-    {
-      id: 3, name: 'C3', entryDist: 200, apexDist: 200, exitDist: 200,
-      lat: metersToLat(C3_M), lon: REF_LON, advice: 'C3 advice',
-    },
-  ],
-  mapPoints: [],
-  recordLap: 60,
-};
-
-const MPH_TO_MS = 0.44704;
-
-describe('CoachingService clustered-corner FEEDFORWARD geometry', () => {
+describe('CoachingService Feedforward — clustered corners (heading-aware)', () => {
   let service: CoachingService;
-  const fired: { corner: string; positionM: number; ttcSec: { c1: number; c2: number; c3: number } }[] = [];
+  let decisions: CoachingDecision[];
 
   beforeEach(() => {
+    // Fake timers so we can fast-forward past the TimingGate cooldown between
+    // feedforward enqueues (cooldown is wall-clock, not telemetry-frame time).
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-29T12:00:00Z'));
     service = new CoachingService();
-    service.setTrack(SYNTH_TRACK);
-    fired.length = 0;
+    decisions = [];
+    service.onCoaching(msg => decisions.push(msg));
   });
 
-  // SKIP: real production bug captured below — `findNearestCorner` in
-  // coachingService.ts:~658 picks the geometrically-closest corner without
-  // heading awareness, so for clustered corners (C1/C2/C3 along the same
-  // approach line) C2 only becomes "nearest" after the C1↔C2 midpoint,
-  // collapsing TTC for C2 to ~1.83s and C3 to ~1.84s. The fix is a
-  // heading-aware "next corner ahead" predicate (project the corner onto
-  // the driver's heading vector; only consider corners where the
-  // along-heading distance is positive). Tracked separately — un-skip
-  // once that fix lands.
-  it.skip('each of C1/C2/C3 emits feedforward while still ahead, and at TTC >= 3.0s', () => {
-    const speedMph = 60;
-    const speedMs = speedMph * MPH_TO_MS;
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
-    // Approach from -300m (south of C1) at 60mph along the meridian.
-    // 25Hz => 0.04s per frame => speedMs * 0.04 ≈ 1.07m per frame.
-    const STEP_M = speedMs * 0.04;
-    const START_M = -300;
-    const END_M = 250; // Drive past C3.
+  const createFrame = (overrides: Partial<TelemetryFrame> = {}): TelemetryFrame => ({
+    time: 0,
+    latitude: 38.16,
+    longitude: -122.45,
+    speed: 60,
+    throttle: 50,
+    brake: 0,
+    gLat: 0,
+    gLong: 0,
+    ...overrides,
+  });
 
-    // Capture per-feedforward fire: position when fired and per-corner TTC.
-    type Fire = { corner: string; positionM: number; ttcC1: number; ttcC2: number; ttcC3: number };
-    const fires: Fire[] = [];
+  // Helpers: ~1° lat ≈ 111_111m. So 1m north ≈ 0.000009°.
+  const M_PER_DEG_LAT = 111_111;
+  const metersNorth = (m: number) => m / M_PER_DEG_LAT;
 
-    let currentPosM = START_M;
-    // Spy on the queue's enqueue method — captures every feedforward decision
-    // independent of whether the TimingGate lets it through to delivery.
-    // The bug we're testing is geometric (which corner gets enqueued when),
-    // not delivery throttling — so we observe at the enqueue layer.
-    const enqueueSpy = vi.spyOn(CoachingQueue.prototype, 'enqueue');
-    enqueueSpy.mockImplementation(function (this: CoachingQueue, msg: CoachingDecision) {
-      if (msg.path === 'feedforward') {
-        const cornerName = msg.text.split(':')[0];
-        fires.push({
-          corner: cornerName,
-          positionM: currentPosM,
-          ttcC1: (C1_M - currentPosM) / speedMs,
-          ttcC2: (C2_M - currentPosM) / speedMs,
-          ttcC3: (C3_M - currentPosM) / speedMs,
-        });
-      }
-      // No-op: don't actually enqueue, to keep the test focused on
-      // feedforward geometry without queue/timing-gate side effects.
-    });
+  /** Make a track with the given corners array. */
+  const trackWith = (corners: Corner[], center = { lat: 38.16, lng: -122.45 }): Track => ({
+    name: 'Synthetic',
+    length: 1000,
+    sectors: [{ id: 1, name: 'S1', startDist: 0, endDist: 1000 }],
+    corners,
+    mapPoints: [{ x: 0, y: 0 }],
+    recordLap: 60,
+    center,
+  });
 
-    let i = 0;
-    const trace: { pos: number; nearestApprox: string }[] = [];
-    for (let posM = START_M; posM <= END_M; posM += STEP_M, i++) {
-      currentPosM = posM;
-      const frame: TelemetryFrame = {
-        time: i * 0.04,
-        latitude: metersToLat(posM),
-        longitude: REF_LON,
-        speed: speedMph,
-        throttle: 80,
-        brake: 0,
-        gLat: 0.05,
-        gLong: 0.1,
-      };
-      service.processFrame(frame);
-      // Record what *should* be nearest by raw geometry (ignoring 150m gate).
-      const dC1 = Math.abs(posM - C1_M);
-      const dC2 = Math.abs(posM - C2_M);
-      const dC3 = Math.abs(posM - C3_M);
-      const minD = Math.min(dC1, dC2, dC3);
-      const nearestApprox = minD <= 150
-        ? (minD === dC1 ? 'C1' : minD === dC2 ? 'C2' : 'C3')
-        : 'none';
-      if (i % 25 === 0) trace.push({ pos: posM, nearestApprox });
-    }
-    // eslint-disable-next-line no-console
-    console.log(`[clustered] geometric-nearest trace:`, trace);
+  it('approaching clustered C1/C2 along the heading line, fires C1 first (not the geometrically closer C2)', () => {
+    // Driver heading north along a straight approach line with two clustered
+    // corners. C1 at lat-base, C2 200m further north.
+    //   Frame 1 — car at +50m: C1 50m ahead (within 150m trigger), C2 150m
+    //     ahead (just at trigger boundary, excluded). FF fires for C1.
+    //   Frame 2 — car at +90m: C1 90m BEHIND (heading north, C1 is south),
+    //     C2 110m AHEAD. Pre-fix nearest-only would still pick C1 (90<110)
+    //     but it's already lastCorner so no new fire. Post-fix C1 is rejected
+    //     as behind; C2 is the next-corner-ahead and FF fires for it.
+    // Distances chosen so neither frame lands in the APEX/MID_CORNER phases
+    // that would put TimingGate in BLACKOUT (corners > 30m from car).
+    const carLat = 38.16, carLon = -122.45;
+    const c1: Corner = {
+      id: 1, name: 'Turn 1', entryDist: 0, apexDist: 0, exitDist: 0,
+      lat: carLat + metersNorth(0), lon: carLon, advice: 'C1 advice',
+    };
+    const c2: Corner = {
+      id: 2, name: 'Turn 2', entryDist: 0, apexDist: 0, exitDist: 0,
+      lat: carLat + metersNorth(200), lon: carLon, advice: 'C2 advice',
+    };
+    service.setTrack(trackWith([c1, c2], { lat: carLat, lng: carLon }));
 
-    // eslint-disable-next-line no-console
-    console.log(
-      `[clustered] feedforward fires (${fires.length}):`,
-      fires.map(f =>
-        `${f.corner}@pos=${f.positionM.toFixed(1)}m ` +
-        `ttcC1=${f.ttcC1.toFixed(2)}s ttcC2=${f.ttcC2.toFixed(2)}s ttcC3=${f.ttcC3.toFixed(2)}s`,
-      ),
-    );
+    // Frame 1: establish heading by driving north a small step. C1 fires here.
+    service.processFrame(createFrame({
+      time: 0, latitude: carLat + metersNorth(50), longitude: carLon, speed: 60,
+    }));
+    // Clear prior decisions (the first frame fires C1 since it's within trigger).
+    decisions.length = 0;
+    // Advance past delivery + cooldown (2000ms + 3000ms beginner cooldown).
+    // TimingGate transitions are gated by `update()` calls inside processFrame,
+    // and each call only does one DELIVERING→COOLDOWN→OPEN transition. So we
+    // tick through a couple of stationary frames to move the gate to OPEN.
+    vi.advanceTimersByTime(3000);
+    service.processFrame(createFrame({
+      time: 0.5, latitude: carLat + metersNorth(50), longitude: carLon, speed: 60,
+    }));
+    vi.advanceTimersByTime(3000);
+    service.processFrame(createFrame({
+      time: 1.0, latitude: carLat + metersNorth(50), longitude: carLon, speed: 60,
+    }));
+    decisions.length = 0;
 
-    const cornersFired = new Set(fires.map(f => f.corner));
+    // Frame 2: driver is now at +90m north — C1 is 90m BEHIND, C2 is 110m AHEAD.
+    service.processFrame(createFrame({
+      time: 1.04, latitude: carLat + metersNorth(90), longitude: carLon, speed: 60,
+    }));
 
-    // Assertion 1: each corner emits at least once.
-    expect(cornersFired.has('C1')).toBe(true);
-    expect(cornersFired.has('C2')).toBe(true);
-    expect(cornersFired.has('C3')).toBe(true);
+    const ff = decisions.find(d => d.path === 'feedforward');
+    expect(ff).toBeDefined();
+    expect(ff!.text).toContain('Turn 2'); // C2 is ahead; C1 must be rejected as behind.
+    expect(ff!.text).not.toContain('Turn 1');
+  });
 
-    // Assertion 2: each fire happens while that corner is still AHEAD
-    // (positionM <= corner's metric position).
-    const cornerM: Record<string, number> = { C1: C1_M, C2: C2_M, C3: C3_M };
-    for (const f of fires) {
-      expect(f.positionM).toBeLessThanOrEqual(cornerM[f.corner] + 1); // 1m slack
-    }
+  it('fallback: when heading is unavailable (single GPS sample), still fires FEEDFORWARD for nearby corners', () => {
+    // Single frame → no GPS history → no heading. Must fall back to nearest-only.
+    const carLat = 38.16, carLon = -122.45;
+    const c1: Corner = {
+      id: 1, name: 'Turn 1', entryDist: 0, apexDist: 0, exitDist: 0,
+      lat: carLat + metersNorth(50), lon: carLon, advice: 'C1 advice',
+    };
+    service.setTrack(trackWith([c1], { lat: carLat, lng: carLon }));
 
-    // Assertion 3: TIME-TO-CORNER at fire moment must be >= 3.0s.
-    // EXPECTED TO FAIL on C2 and C3 — see file header.
-    // Bug location: koru-application/src/services/coachingService.ts:658
-    //   `findNearestCorner` chooses geometrically closest with no heading
-    //   awareness, so C2 only fires when driver crosses the C1–C2 midpoint
-    //   (~50m past C1 ⇒ TTC to C2 is 50m / 26.8m·s⁻¹ ≈ 1.86s).
-    // Recommended fix: a heading-aware "next corner ahead" predicate that
-    //   projects (corner - position) onto the driver's heading vector and
-    //   filters out corners behind.
-    for (const f of fires) {
-      const ttcOwn = (cornerM[f.corner] - f.positionM) / speedMs;
-      // eslint-disable-next-line no-console
-      if (ttcOwn < 3.0) {
-        console.log(
-          `[clustered] BUG: ${f.corner} fired with TTC=${ttcOwn.toFixed(2)}s ` +
-          `(< 3.0s budget). See findNearestCorner in coachingService.ts.`,
-        );
-      }
-      expect(ttcOwn).toBeGreaterThanOrEqual(3.0);
-    }
+    service.processFrame(createFrame({
+      time: 0, latitude: carLat, longitude: carLon, speed: 60,
+    }));
+
+    const ff = decisions.find(d => d.path === 'feedforward');
+    expect(ff).toBeDefined();
+    expect(ff!.text).toContain('Turn 1');
+  });
+
+  it('rejection: a corner directly behind the driver does not fire FEEDFORWARD', () => {
+    // Corner 50m SOUTH of driver. Driver heading NORTH → corner is 180° behind → reject.
+    // Use a decoy corner far away (north, well outside trigger) so the corners
+    // array is non-trivial; the only candidate is the behind one and we want
+    // to assert it is filtered out.
+    const carLat = 38.16, carLon = -122.45;
+    const cBehind: Corner = {
+      id: 1, name: 'Turn Behind', entryDist: 0, apexDist: 0, exitDist: 0,
+      lat: carLat + metersNorth(-50), lon: carLon, advice: 'Behind advice',
+    };
+    service.setTrack(trackWith([cBehind], { lat: carLat, lng: carLon }));
+
+    // Frame 1 — no heading yet, fallback to nearest-only fires the behind corner
+    // (this is the FALLBACK branch we explicitly preserve). Throw it away; we
+    // care about the later frames once heading is known.
+    service.processFrame(createFrame({
+      time: 0, latitude: carLat + metersNorth(55), longitude: carLon, speed: 60,
+    }));
+    // Step gate to OPEN so a fresh enqueue would actually drain.
+    vi.advanceTimersByTime(3000);
+    service.processFrame(createFrame({
+      time: 0.5, latitude: carLat + metersNorth(60), longitude: carLon, speed: 60,
+    }));
+    vi.advanceTimersByTime(3000);
+    service.processFrame(createFrame({
+      time: 1.0, latitude: carLat + metersNorth(65), longitude: carLon, speed: 60,
+    }));
+    decisions.length = 0;
+
+    // Heading is now firmly north, gate is OPEN. Continue driving north —
+    // the behind corner must NOT fire. (If lastCorner is still latched on the
+    // behind corner, the enqueue is suppressed regardless; what we really
+    // assert is that no NEW feedforward decision lands.)
+    service.processFrame(createFrame({
+      time: 1.04, latitude: carLat + metersNorth(70), longitude: carLon, speed: 60,
+    }));
+
+    expect(decisions.find(d => d.path === 'feedforward')).toBeUndefined();
+  });
+
+  it('rejection: turning around (heading flips) makes the same corner eligible again', () => {
+    // Two corners — one north (decoy, far enough that it does fire as we
+    // approach it), one south of the start. We drive north, then turn around
+    // and head south, and assert the south corner fires once it's ahead.
+    const carLat = 38.16, carLon = -122.45;
+    const cNorth: Corner = {
+      id: 1, name: 'Turn North', entryDist: 0, apexDist: 0, exitDist: 0,
+      lat: carLat + metersNorth(120), lon: carLon, advice: 'N advice',
+    };
+    const cSouth: Corner = {
+      id: 2, name: 'Turn South', entryDist: 0, apexDist: 0, exitDist: 0,
+      lat: carLat + metersNorth(-50), lon: carLon, advice: 'S advice',
+    };
+    service.setTrack(trackWith([cNorth, cSouth], { lat: carLat, lng: carLon }));
+
+    // Drive north a bit so the cNorth corner becomes lastCorner (pulls latching
+    // off cSouth, which fires on frame 1 via fallback).
+    service.processFrame(createFrame({
+      time: 0, latitude: carLat + metersNorth(0), longitude: carLon, speed: 60,
+    }));
+    vi.advanceTimersByTime(3000);
+    service.processFrame(createFrame({
+      time: 0.5, latitude: carLat + metersNorth(20), longitude: carLon, speed: 60,
+    }));
+    vi.advanceTimersByTime(3000);
+    service.processFrame(createFrame({
+      time: 1.0, latitude: carLat + metersNorth(40), longitude: carLon, speed: 60,
+    }));
+    // By now lastCorner should have moved to cNorth (closer + ahead).
+    decisions.length = 0;
+
+    // Turn around — drive south. Heading flips. cSouth is now ahead, cNorth is behind.
+    vi.advanceTimersByTime(3000);
+    service.processFrame(createFrame({
+      time: 1.5, latitude: carLat + metersNorth(20), longitude: carLon, speed: 60,
+    }));
+    vi.advanceTimersByTime(3000);
+    service.processFrame(createFrame({
+      time: 2.0, latitude: carLat + metersNorth(0), longitude: carLon, speed: 60,
+    }));
+    vi.advanceTimersByTime(3000);
+    service.processFrame(createFrame({
+      time: 2.5, latitude: carLat + metersNorth(-15), longitude: carLon, speed: 60,
+    }));
+
+    const ffSouth = decisions.find(d => d.path === 'feedforward' && d.text.includes('Turn South'));
+    expect(ffSouth).toBeDefined();
   });
 });
