@@ -20,9 +20,12 @@ const HUMANIZATION_BUDGET_MS = 50;
  *  short authoritative imperative. Frame speed is in mph (see TelemetryFrame). */
 const HIGH_SPEED_BRAKE_THRESHOLD_MPH = 70;
 
-/** Actions that are "BRAKE-class" for the high-speed safety override. */
+/** Actions that are "BRAKE-class" for the high-speed safety override.
+ *  Excludes TRAIL_BRAKE: trail braking is a deliberate technique, not an
+ *  emergency. Treating it as "Brake hard!" at speed would be coaching the
+ *  driver out of a correct input. (Audit B2.) */
 const BRAKE_CLASS_ACTIONS: ReadonlySet<CoachAction> = new Set<CoachAction>([
-  'BRAKE', 'THRESHOLD', 'SPIKE_BRAKE', 'TRAIL_BRAKE',
+  'BRAKE', 'THRESHOLD', 'SPIKE_BRAKE',
 ]);
 
 /** Terse, authoritative imperatives for safety-override emissions.
@@ -34,7 +37,6 @@ const SAFETY_OVERRIDE_TEXT: Partial<Record<CoachAction, string>> = {
   BRAKE: 'Brake hard!',
   THRESHOLD: 'Brake hard!',
   SPIKE_BRAKE: 'Brake hard!',
-  TRAIL_BRAKE: 'Brake hard!',
 };
 
 /** Map actions to priority levels (module-level Map avoids per-call array allocations).
@@ -382,8 +384,18 @@ export class CoachingService {
         // Skip repeats
         if (rule.action === this.lastHotAction) continue;
 
-        const priority = this.boostForGoals(rule.action, actionPriority(rule.action));
+        let priority = this.boostForGoals(rule.action, actionPriority(rule.action));
         this.lastHotAction = rule.action;
+
+        // Audit B2: when DR-6 safety override applies to a non-P0 action
+        // (e.g. THRESHOLD, SPIKE_BRAKE at >70 mph), promote priority to P0
+        // so the message bypasses the TimingGate MID_CORNER blackout. The
+        // text is already the override imperative; without P0 promotion the
+        // override imperative would be silenced mid-corner — exactly the
+        // moment a panicked driver needs it.
+        if (priority !== 0 && this.shouldBypassHumanization(rule.action, frame)) {
+          priority = 0;
+        }
 
         const decision: CoachingDecision = {
           path: 'hot',
