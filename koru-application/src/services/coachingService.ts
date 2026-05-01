@@ -134,8 +134,12 @@ export class CoachingService {
   private currentPhase: CornerPhase = 'STRAIGHT';
   private track: Track | null = null;
   private lastSkillLevel: import('../types').SkillLevel = 'BEGINNER';
-  private lastCognitiveCheck = 0;
-  private lastHustleFire = 0;
+  // -1 sentinel = "never checked". Using 0 would falsely fire on a replay
+  // that starts at session-relative time > threshold (e.g. resuming at t=200s
+  // would trigger COGNITIVE_OVERLOAD on frame 1 because 200 - 0 > 10). On the
+  // first frame we record `frame.time` and skip the check. (D-1 audit fix.)
+  private lastCognitiveCheck = -1;
+  private lastHustleFire = -1;
 
   // Recent telemetry window for the COLD prompt builder. ~2s at 25Hz = 50 frames.
   // Keep this small — it's read on every cold call but only the cold path needs it.
@@ -567,6 +571,12 @@ export class CoachingService {
 
   /** Check driver model for cognitive overload — runs outside decision matrix */
   private checkCognitiveOverload(frame: TelemetryFrame): void {
+    // First frame of the session (or replay) — seed the timer and skip.
+    // Otherwise a replay starting at e.g. t=200s would fire instantly.
+    if (this.lastCognitiveCheck === -1) {
+      this.lastCognitiveCheck = frame.time;
+      return;
+    }
     // Only check every 10 seconds
     if (frame.time - this.lastCognitiveCheck < 10) return;
     this.lastCognitiveCheck = frame.time;
@@ -593,6 +603,11 @@ export class CoachingService {
    * moment conditions actually match). Beginner-focused: BEGINNER skill only.
    */
   private checkHustle(frame: TelemetryFrame): void {
+    // First frame of the session — seed the timer and skip (D-1 audit fix).
+    if (this.lastHustleFire === -1) {
+      this.lastHustleFire = frame.time;
+      return;
+    }
     if (frame.time - this.lastHustleFire < 8) return;
     if (this.driverModel.getSkillLevel() !== 'BEGINNER') return;
 

@@ -349,6 +349,25 @@ describe('CoachingService Phase 6', () => {
     });
   });
 
+  describe('D-1: session resume must not fire instantly on first frame', () => {
+    it('does not emit COGNITIVE_OVERLOAD or HUSTLE on the first frame at t=300s', () => {
+      // Replay starting at session-relative t=300s. With the old `lastCognitive
+      // Check = 0` initialization, `300 - 0 = 300 > 10` would falsely fire on
+      // frame 1. The -1 sentinel + first-frame seed prevents that.
+      service.processFrame(createFrame({
+        time: 300,
+        speed: 55,
+        throttle: 75,    // would qualify as "lazy throttle" for HUSTLE
+        brake: 0,
+        gLat: 0.1,
+        gLong: 0,
+      }));
+
+      expect(decisions.find(d => d.action === 'COGNITIVE_OVERLOAD')).toBeUndefined();
+      expect(decisions.find(d => d.action === 'HUSTLE')).toBeUndefined();
+    });
+  });
+
   describe('Session goals — clearing', () => {
     it('clears prioritized actions when setSessionGoals is called with empty array', () => {
       service.setSessionGoals([
