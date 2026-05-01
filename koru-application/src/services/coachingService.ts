@@ -66,15 +66,23 @@ type CoachingCallback = (msg: CoachingDecision) => void;
 export const FEEDFORWARD_LEAD_S = 3.0;
 export const TTS_BUDGET_S = 1.5;
 export const MIN_TRIGGER_M = 40;
+/** Audit B3: upper cap on the velocity-scaled geofence. Without this, the
+ *  trigger grows unbounded with speed — at 140 mph the unclamped value is
+ *  ~280m, which overlaps adjacent corners in dense complexes (Sonoma T2/T3),
+ *  firing FEEDFORWARD for the next corner while the driver is still in the
+ *  current one. 250m gives a generous lead at any realistic track speed
+ *  without bleeding across complex sections. */
+export const MAX_TRIGGER_M = 250;
 export const MPH_TO_MPS = 0.44704;
 
 /** Velocity-scaled FEEDFORWARD geofence radius (DR-1).
- *  Returns 0 when stationary so the path does not fire at idle. */
+ *  Returns 0 when stationary so the path does not fire at idle.
+ *  Clamped to [MIN_TRIGGER_M, MAX_TRIGGER_M] at the bounds. */
 export function getTriggerDistance(speedMph: number): number {
   if (!Number.isFinite(speedMph) || speedMph <= 0) return 0;
   const vMps = speedMph * MPH_TO_MPS;
   const scaled = vMps * (FEEDFORWARD_LEAD_S + TTS_BUDGET_S);
-  return Math.max(MIN_TRIGGER_M, scaled);
+  return Math.min(MAX_TRIGGER_M, Math.max(MIN_TRIGGER_M, scaled));
 }
 
 /** Build the FEEDFORWARD message text for a corner (DR-5).

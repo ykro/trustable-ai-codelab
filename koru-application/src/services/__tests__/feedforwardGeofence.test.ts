@@ -4,6 +4,7 @@ import {
   FEEDFORWARD_LEAD_S,
   TTS_BUDGET_S,
   MIN_TRIGGER_M,
+  MAX_TRIGGER_M,
   MPH_TO_MPS,
   getTriggerDistance,
   buildFeedforwardText,
@@ -70,6 +71,17 @@ describe('DR-1 getTriggerDistance', () => {
   it('clamps to MIN_TRIGGER_M floor at very low (non-zero) speed', () => {
     // 5 mph * 0.44704 * 4.5 ≈ 10m — well below the 40m floor.
     expect(getTriggerDistance(5)).toBe(MIN_TRIGGER_M);
+  });
+
+  it('caps at MAX_TRIGGER_M at very high speed (Audit B3)', () => {
+    // 140 mph * 0.44704 * 4.5 ≈ 281m without the cap. The cap clamps to 250m
+    // so adjacent corners in dense complexes (Sonoma T2/T3) don't overlap.
+    expect(getTriggerDistance(140)).toBe(MAX_TRIGGER_M);
+    // Sanity: very high speed also stays clamped.
+    expect(getTriggerDistance(200)).toBe(MAX_TRIGGER_M);
+    // Just below the cap, the value is still scaled (not clamped).
+    // 120 mph * 0.44704 * 4.5 ≈ 241m, below the 250m cap.
+    expect(getTriggerDistance(120)).toBeLessThan(MAX_TRIGGER_M);
   });
 
   it('scales linearly with velocity at speed', () => {
