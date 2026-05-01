@@ -13,7 +13,7 @@ This system tells you in real time how to adapt and fix it, adjusted to your ski
 
 - [April 29 Technical Gate — Data Reasoning Checkpoint](#april-29-technical-gate--data-reasoning-checkpoint)
   - [Domain Expertise Layer](#domain-expertise-layer)
-- [Post-Gate Feedback (April 29 review)](#post-gate-feedback-april-29-review)
+- [Post-Gate Feedback (April 29 review)](#post-gate-feedback-april-29-review--what-changed-and-why)
 - [Sonoma Field Test — Validation Plan (May 23, 2026)](#sonoma-field-test--validation-plan-may-23-2026)
 - [Roadmap](#roadmap)
   - [Data Reasoning](#data-reasoning)
@@ -45,7 +45,7 @@ All work lives in [`koru-application/src/services`](koru-application/src/service
 | 1 — Detection + timing | ✅ | `CornerPhaseDetector` (GPS primary with equirectangular pre-filter + G-force fallback). `TimingGate` state machine with pre-blackout state restoration. |
 | 2 — Priority queue | ✅ | `CoachingQueue` with P0–P3 priorities, 3s stale expiry, P0 preempt, max 5 items. |
 | 3 — Driver model | ✅ | `DriverModel` classifies BEGINNER / INTERMEDIATE / ADVANCED from input smoothness + coasting ratio. Time-based 10s window, 5s hysteresis with re-promotion guard. |
-| 4 — Test infrastructure | ✅ | Vitest, **85 tests across 10 files**, Sonoma CSV integration + HOT-path latency benchmark. Covers cooldown-during-blackout, GPS phase reachability, hysteresis, P0 floor, P0 re-entry, nearest-corner regression. |
+| 4 — Test infrastructure | ✅ | Vitest, **185 tests across 32 files**, Sonoma CSV integration + 9 latency benchmarks (HOT path, humanization, P0 stress, burst, concurrent load, transition, stale expiry, COLD recovery, time-to-corner). Regressions for every fix found in the two post-gate audit rounds. |
 | 5 — Domain expertise (coaching knowledge) | ✅ | See [Domain Expertise Layer](#domain-expertise-layer) below. Ross Bentley curriculum + T-Rod transcript + mentorship insights flow into decision rules, cold-path prompts, persona phrasing, hustle detection, and session-goal vocabulary. |
 | 6 — Session intelligence | 🟡 partial | `SessionGoal` + `setSessionGoals()` with working `prioritizedActions` boost (floored at P1). `DriverProfile` / `DriverProfileStore` interfaces. In-session `PerformanceTracker`. **Pending:** message compression (owned), pre-race chat UI (UX), persistence backend (AGY). |
 
@@ -130,7 +130,7 @@ The hard technical gate is two days out. These are the areas where outside revie
 4. **Offline behavior.** Cold path resets `lastColdTime = 0` on fetch failure so the next frame can retry. HOT + FEEDFORWARD work without network. Worth confirming the offline contract is clear enough for the May 23 Sonoma field test.
 5. **Coaching content / Domain Expertise Layer.** `humanizeAction` covers 5 personas × ~20 actions × 3 skill levels — a lot of strings. The BEGINNER set is derived from Ross Bentley pedagogy and the T-Rod Sonoma session, and every threshold in `DECISION_MATRIX` is sourced. The [Domain Expertise Layer](#domain-expertise-layer) section documents the provenance map. A spot-check of any coaching line against its cited source would be useful.
 6. **Cross-team contracts.** Phase 6.2 depends on UX (Rabimba) — see [`docs/pre-race-chat-contract.md`](docs/pre-race-chat-contract.md). Phase 6.3 depends on AGY Pipeline (Mike + Austin) — `DriverProfileStore` interface in [`types.ts`](koru-application/src/types.ts). Useful for reviewers to sanity-check whether these contracts are enough for the downstream pods to start.
-7. **Test coverage.** 81 unit + integration tests with regressions for every blocker fix, plus the new latency benchmark. Acknowledged gaps: no soak test for queue under burst input; no end-to-end test of cold-path retry on the actual Gemini endpoint. Flagging in case either is needed before the field test.
+7. **Test coverage.** 185 unit + integration tests across 32 files, including 9 latency benchmarks (HOT path, humanization, P0 fault, burst, concurrent, transition, stale, COLD recovery, time-to-corner) plus memory pressure, long-session, listener fan-out, network jitter, and frame-integrity tests. Two post-gate audit rounds each surfaced bugs that were closed with regression tests. Acknowledged gaps: no end-to-end test against the real Gemini endpoint, no real-Pixel-10 latency measurement (Sonoma is the place for that — see [Sonoma Field Test plan](#sonoma-field-test--validation-plan-may-23-2026)).
 
 ### Telemetry capability matrix (degraded modes)
 
@@ -152,37 +152,105 @@ If BT Classic on the OBDLink MX+ doesn't reach the PWA in time for May 23, the s
 
 ---
 
-## Post-Gate Feedback (April 29 review)
+## Post-Gate Feedback (April 29 review) — what changed and why
 
-The Googler review returned **CONDITIONAL PASS**, with three categories of follow-up before Sonoma. Items below have testable user-story versions in [`docs/user-stories.md`](docs/user-stories.md) (DR-1..7 for Data Reasoning, plus updates to AGY-1..3 and UX-2 for the long-term framework asks).
+The Googler review returned **CONDITIONAL PASS** with six concrete asks (DR-1..6, one DR-7 for after Sonoma) plus updates to AGY-1 and UX-2 for cross-domain portability. Every ask is mapped to a user story in [`docs/user-stories.md`](docs/user-stories.md) with acceptance criteria. This section documents what each item was, how it was implemented, where it lives in code, and the test that proves it.
 
-### Field-test blockers (must close before May 23)
+> Two follow-up audits ran on the implementation. Each surfaced real bugs that were then fixed; both rounds of fixes are listed inline below where they apply.
 
-- **DR-1 — Dynamic FEEDFORWARD geofence.** The 150m static trigger leaves only ~1.8s of cognitive headroom at 100 mph after a 1.5s TTS budget. Replace with a velocity-scaled trigger that targets a fixed time-to-event (≥3.0s default).
-- **DR-2 — P0 stress test + documented bypass parameters.** Forced-fault simulator that hangs/crashes the COLD path; verify HOT still emits P0 alerts within budget. Document exactly what triggers P0.
-- **DR-3 — HOT-path humanization ≤50ms.** Add an assertion to the existing latency benchmark; fall back to raw robotic command if humanization budget is exceeded.
+### DR-1 — Dynamic FEEDFORWARD geofence ([story](docs/user-stories.md#dr-1--dynamic-feedforward-geofence))
 
-### Pedagogical tuning
+**The ask.** Replace the static 150m geofence — at 100 mph it gives only ~1.8s of cognitive headroom after a 1.5s TTS budget. Need a velocity-scaled trigger that holds time-to-event constant in seconds, not metres.
 
-- **DR-4 — "Why over What" in COLD.** Restructure Gemini prompts so post-corner analysis explains root cause (brake release abruptness, weight transfer) instead of restating the symptom.
-- **DR-5 — Eyes-up coaching in FEEDFORWARD.** Before high-speed corners (Sonoma T10 in particular), prompts coach driver vision ("Eyes up, look for the bridge tire mark") in addition to pedal/wheel guidance.
-- **DR-6 — Safety override of humanization.** Under high-slip / high-speed-braking conditions, drop conversational humanization. A spin at 90 mph requires authoritative "Both feet in!" — not a polite suggestion.
+**What changed.** `getTriggerDistance(speedMph)` in [`coachingService.ts`](koru-application/src/services/coachingService.ts) returns `min(MAX_TRIGGER_M, max(MIN_TRIGGER_M, v_mps × (FEEDFORWARD_LEAD_S + TTS_BUDGET_S)))` with `LEAD_S=3.0`, `TTS_BUDGET_S=1.5`, `MIN=40m`, `MAX=250m`. At 30 mph → 60m, 60 mph → 121m, 100 mph → 201m, 140 mph → 250m (capped). Idle → 0m (no fire). The `MAX_TRIGGER_M` cap was added in audit-1 fix B3 to prevent the trigger from overlapping clustered corners (Sonoma T2/T3) at very high speed.
 
-### Long-term framework extensibility (post-Sonoma)
+**Plus** — the second-round audit caught that even with the dynamic radius, `findNearestCornerWithinTriggerDistance` was picking the geometrically-closest corner without heading awareness, so for clustered corners along an approach line (T1/T2/T3) the second corner only became "nearest" after the C1↔C2 midpoint. A heading-aware "next corner ahead" predicate now rejects corners ≥ 90° behind the driver, with a fallback to nearest-only when GPS heading is not yet derivable.
 
-- **DR-7 — Abstract geofence triggers.** Decouple FEEDFORWARD from track-coordinate triggers; expose a generic temporal/spatial event source so the same engine can drive a delivery drone or an assembly-line stage. (Pattern already documented in [`docs/learnings-real-time-data-reasoning.md`](docs/learnings-real-time-data-reasoning.md).)
-- **AGY (revised) — Generic time-series schema.** AGY-1's storage schema must accept generic JSON time-series sensor payloads, not be hardcoded to `RPM/throttle/brake`. Owners: **Mike Wolfson + Austin**.
-- **UX (revised) — Generic Session Initialization module.** UX-2's pre-race chat must be loadable as a "Session Initialization" component with a domain-agnostic API contract for driver/operator preferences. Owner: **Rabimba Karanjai**.
+**Tests proving it.** [`feedforwardGeofence.test.ts`](koru-application/src/services/__tests__/feedforwardGeofence.test.ts) (14 tests: scaling at 30/60/100 mph, idle, low-speed floor, MAX cap), [`feedforwardGeofence.timeToCorner.test.ts`](koru-application/src/services/__tests__/feedforwardGeofence.timeToCorner.test.ts) (TTC ≥ 4.5s at high speed, ≥ 3.0s low speed across every Sonoma corner), [`coachingService.clusteredCorners.test.ts`](koru-application/src/services/__tests__/coachingService.clusteredCorners.test.ts) (heading-aware on a synthetic 3-corner cluster).
+
+### DR-2 — P0 stress test + documented bypass parameters ([story](docs/user-stories.md#dr-2--p0-stress-test--documented-bypass-parameters))
+
+**The ask.** Document what triggers P0 and prove with a forced-fault test that the HOT path keeps firing safety alerts when the COLD path hangs or crashes.
+
+**What changed.** A new "P0 Safety Bypass — parameters and guarantees" section in [`docs/data-reasoning.md`](docs/data-reasoning.md#p0-safety-bypass--parameters-and-guarantees) lists exact triggers (`OVERSTEER_RECOVERY` decision rule, plus the reserved `BRAKE` slot), bypass behaviors (skips TimingGate blackout, preempts queue, no humanization budget, no cold-path dependency, P0 floor on goal-boost), and failure modes that do NOT affect P0. The split-brain architecture was already structurally correct — `runColdPath` is dispatched via `void`, never awaited inside `processFrame`, so the test was provable without production-code changes.
+
+**Tests proving it.** [`coachingService.p0Stress.test.ts`](koru-application/src/services/__tests__/coachingService.p0Stress.test.ts) — 7 cases injecting each fault (Promise that never resolves, sync throw, 5-second slow resolve, success control), asserting P0 emits at `priority === 0` within a 100ms wall-clock HOT budget regardless of cold-path state.
+
+### DR-3 — HOT-path humanization ≤ 50ms with raw fallback ([story](docs/user-stories.md#dr-3--hot-path-humanization--50-ms-with-raw-command-fallback))
+
+**The ask.** Make sure humanization can never push the HOT path over 50ms. If the text-parser slows down, fall back to raw robotic commands for the field test.
+
+**What changed.** Every `humanizeAction` call is wrapped in `humanizeOrFallback`, which records per-call wall-clock latency in a 2000-element ring buffer (audit-2 swapped this from `Array.shift()` O(N) to circular-buffer O(1) push). Three escape valves:
+1. **Single-frame tripwire** (>50ms on one call) — next emission falls back to raw label, then auto-disarms.
+2. **N-of-M permanent fallback** (>25% breaches in last 100 frames) — humanization is permanently disabled for the rest of the session, raw labels for everything; one-shot `console.warn` and a public `isHumanizationPermanentFallback()` flag for the UX team to surface visually.
+3. **Audit-2 widening of the B5 boundary** — the production latency metric now spans the entire synchronous HOT path including `drainQueue` and listener callbacks, not just the humanizer. The 50ms budget is now measured end-to-end.
+
+**Tests proving it.** [`coachingService.humanizationBudget.test.ts`](koru-application/src/services/__tests__/coachingService.humanizationBudget.test.ts) (single-frame fallback + N-of-M escalation), [`coachingService.processFrameLatency.test.ts`](koru-application/src/services/__tests__/coachingService.processFrameLatency.test.ts) (full-path p99 < 50ms over 1000 frames).
+
+### DR-4 — "Why over What" in COLD ([story](docs/user-stories.md#dr-4--why-over-what-prompt-restructuring-in-cold))
+
+**The ask.** Use Gemini's physics context to explain root cause, not symptom. "You missed the apex *because your brake release was too abrupt, unloading the front tires*."
+
+**What changed.** A new pure module [`coldPromptBuilder.ts`](koru-application/src/services/coldPromptBuilder.ts) with `buildColdPrompt(ctx)` and `computePhysicsContext(frames)`. The prompt has six structural sections: persona system prompt → physics knowledge block → current telemetry → **computed physics context** (lateral & longitudinal weight-transfer integrals, peak combined G, friction-circle utilization %, brake-release rate with ABRUPT flag, throttle-application rate, speed delta, AT_LIMIT flag) → root-cause-analysis directive ("do NOT restate the symptom — explain WHY in mechanical terms") → mandatory `Symptom: / Root Cause: / Fix:` output schema with the requirement that Root Cause cite at least one number from the context.
+
+**Audit-1 fix B4** added a `brakeReleasedInWindow` boolean — when the telemetry window ends with the driver still on the brakes, the prompt now says "brake still applied at end of window (no release captured)" instead of a misleading near-zero release rate.
+
+**Tests proving it.** [`coldPromptStructure.test.ts`](koru-application/src/services/__tests__/coldPromptStructure.test.ts) — 22 tests covering directive presence, physics-context population for missed-apex / late-brake / early-throttle / oversteer scenarios, output-schema requirements, skill-level adaptation, the brake-not-released flag, and a snapshot test on the canonical missed-apex prompt so future drift is reviewable.
+
+### DR-5 — Eyes-up vision coaching in FEEDFORWARD ([story](docs/user-stories.md#dr-5--eyes-up-vision-coaching-in-feedforward))
+
+**The ask.** Before high-speed corners (Sonoma T10 specifically), tell the driver where to look — not just what to do with the pedals.
+
+**What changed.** Added optional `visualReference?: string` to the `Corner` type. `buildFeedforwardText(corner)` prepends the cue when set: `"T10: Eyes up to the bridge tire mark. Stay committed through the kink."` Tagged corners in the Sonoma fixture: T1 ("Eyes up to the brake marker", added in audit-1 fix P1), T7, T10, T11. Corners without `visualReference` keep the existing `name: advice` shape.
+
+**Tests proving it.** Same [`feedforwardGeofence.test.ts`](koru-application/src/services/__tests__/feedforwardGeofence.test.ts) — six cases verifying corners with/without the cue, whitespace-only fallback, and the cue text reaches the emitted FEEDFORWARD message.
+
+### DR-6 — Humanization safety override ([story](docs/user-stories.md#dr-6--humanization-safety-override-under-high-slip--high-speed-braking))
+
+**The ask.** Under high-slip or high-speed braking, drop conversational humanization. A spin at 90 mph needs "Both feet in!" — not a polite suggestion.
+
+**What changed.** Public predicate `shouldBypassHumanization(action, frame)` — returns true when (a) `OVERSTEER_RECOVERY` at any speed, or (b) BRAKE-class action (`BRAKE / THRESHOLD / SPIKE_BRAKE`) at speed > 70 mph. When true, the emitted message is the raw imperative from a small `SAFETY_OVERRIDE_TEXT` map ("Both feet in!", "Brake hard!"). Audit-1 removed `TRAIL_BRAKE` from the BRAKE-class set (it is a deliberate technique, not an emergency).
+
+**Audit-1 fix B2** then closed a gap: the override text was correct but P1 actions like `THRESHOLD` were still subject to MID_CORNER blackout in the TimingGate. The fix promotes priority to P0 in `runHotPath` whenever the override predicate fires, so safety messages now bypass blackout *and* preempt the queue, matching DR-6's actual intent.
+
+**Tests proving it.** [`coachingService.safetyOverride.test.ts`](koru-application/src/services/__tests__/coachingService.safetyOverride.test.ts) (4 base cases) and [`coachingService.safetyOverridePromotion.test.ts`](koru-application/src/services/__tests__/coachingService.safetyOverridePromotion.test.ts) (P1→P0 promotion under blackout, with controls).
+
+### DR-7 — Abstract geofence triggers (post-Sonoma) ([story](docs/user-stories.md#dr-7--abstract-geofence-triggers-for-cross-domain-portability-post-sonoma))
+
+**The ask.** Decouple FEEDFORWARD from track-coordinate-specific corner objects so the same engine can drive a delivery drone or an assembly-line stage.
+
+**Status.** Not started. Explicitly out of scope for May 23 — no behavioral change required for the field test, this is a refactor task. The pattern is already documented in [`docs/learnings-real-time-data-reasoning.md`](docs/learnings-real-time-data-reasoning.md) (Appendix A "Cross-domain framework extensibility").
+
+### Cross-pod feedback (revised asks)
+
+The reviewer's framework-extensibility section also produced two revised asks for adjacent pods, both tracked in [`docs/user-stories.md`](docs/user-stories.md):
+
+- **AGY-1 generic time-series schema** (Mike Wolfson + Austin) — storage schema must use a domain-agnostic envelope (`timestamp`, `sourceId`, `channels: { [name]: number | string }`) rather than naming `RPM/throttle/brake` at the top level.
+- **UX-2 generic Session Initialization module** (Rabimba Karanjai) — pre-race chat built as a domain-agnostic component with driver-vs-operator labels passed in as configuration.
 
 ### What the reviewer flagged as portable today (no action — recognition)
 
-The HOT/COLD/FEEDFORWARD tri-path routing engine, the P0 Safety Bypass mechanism, and the latency-budget monitoring pattern were called out as "gold-standard patterns for any edge-AI system." These are reflected in [`docs/learnings-real-time-data-reasoning.md`](docs/learnings-real-time-data-reasoning.md) for cross-industry portability.
+The HOT/COLD/FEEDFORWARD tri-path routing engine, the P0 Safety Bypass mechanism, and the latency-budget monitoring pattern were called out as *"gold-standard patterns for any edge-AI system."* These are reflected in [`docs/learnings-real-time-data-reasoning.md`](docs/learnings-real-time-data-reasoning.md) for cross-industry portability — see Appendix A for the lessons distilled from this round of review.
+
+### Status summary
+
+| Item | Status | Closed by |
+|---|---|---|
+| DR-1 dynamic geofence | ✅ | Velocity scaling + MAX cap + heading-aware predicate |
+| DR-2 P0 stress test + docs | ✅ | 7 fault-injection tests + bypass parameters section |
+| DR-3 humanization budget | ✅ | Tripwire + raw fallback + N-of-M permanent fallback + circular buffer |
+| DR-4 why-over-what COLD | ✅ | New `coldPromptBuilder.ts` + brake-not-released flag + 22 tests |
+| DR-5 eyes-up FEEDFORWARD | ✅ Sonoma corners (T1/T7/T10/T11) | Pending: remaining Sonoma corners + non-Sonoma tracks |
+| DR-6 safety override | ✅ | Predicate + override text + P1→P0 promotion under blackout |
+| DR-7 abstract triggers | ⏸️ post-Sonoma | Documented as future-work pattern |
+| AGY-1 generic schema | ⏳ owned by Mike + Austin | Story written, implementation pending |
+| UX-2 generic init module | ⏳ owned by Rabimba | Story written, implementation pending |
 
 ---
 
 ## Sonoma Field Test — Validation Plan (May 23, 2026)
 
-The April 29 review left us with six conditional-pass items (DR-1..6). All six are implemented on the `data-reasoning` branch and proved by unit tests (134 passing across 15 files — see [`docs/data-reasoning.md`](docs/data-reasoning.md#test-suite-layout)). The May 23 field test at Sonoma Raceway is where we verify the same behavior **on the car, at speed, in the helmet** — not in a unit test harness.
+The April 29 review left us with six conditional-pass items (DR-1..6). All six are implemented on the `data-reasoning` branch and proved by unit tests (**185 passing across 32 files** — see [`docs/data-reasoning.md`](docs/data-reasoning.md#test-suite-layout)). The May 23 field test at Sonoma Raceway is where we verify the same behavior **on the car, at speed, in the helmet** — not in a unit test harness.
 
 This section is the test plan: what runs at Sonoma, who runs it, what counts as pass/fail, and how each piece of feedback is checked.
 

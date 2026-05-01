@@ -270,11 +270,11 @@ npm install
 npm test
 ```
 
-This runs `vitest run` and executes all **134 tests across 15 test files**:
+This runs `vitest run` and executes all **185 tests across 32 test files**:
 
 ```
- Test Files  15 passed (15)
-      Tests  134 passed (134)
+ Test Files  32 passed (32)
+      Tests  185 passed (185)
 ```
 
 ### Test suite layout
@@ -308,7 +308,46 @@ These six files were added on the `data-reasoning` branch in response to the Apr
 | `src/services/__tests__/coachingService.humanizationBudget.test.ts` | 2 | **DR-3** — humanization stays under the 50ms tripwire across 1000 frames; when an artificial 60ms spin is injected into `humanizeAction`, the next emission falls back to the raw action label and then auto-disarms. |
 | `src/services/__tests__/feedforwardGeofence.test.ts` | 14 | **DR-1 + DR-5.** DR-1 (8): `getTriggerDistance` returns 0 at idle (no fire), clamps to `MIN_TRIGGER_M` floor at very low non-zero speed, scales linearly with velocity, fires inside the scaled radius and not outside, at 30 / 60 / 100 mph the fire/no-fire boundary lines up with the configured lead time within ±10%. DR-5 (6): corners with `visualReference` produce a FEEDFORWARD message containing the cue; corners without it produce the legacy `name: advice` message; whitespace-only `visualReference` falls back to legacy. |
 | `src/services/__tests__/coachingService.safetyOverride.test.ts` | 4 | **DR-6** — humanization is bypassed and the raw imperative is emitted when (a) the action is `OVERSTEER_RECOVERY` at any speed, or (b) the action is BRAKE-class at speed > 70 mph. Humanization is preserved when (c) BRAKE fires at ≤ 70 mph (control), or (d) any non-safety action fires regardless of speed (control). |
-| `src/services/__tests__/coldPromptStructure.test.ts` | 22 | **DR-4** — `buildColdPrompt` includes the explicit "do not restate the symptom" directive, names every physics lever (weight transfer, friction circle, brake-release rate, throttle-application rate), populates them with real numbers from the telemetry window (different scenarios produce different prompts), demands a `Symptom: / Root Cause: / Fix:` output schema, demands the Root Cause cite a number, and adapts to skill level. Includes a snapshot test of the canonical missed-apex prompt so future drift is reviewable. `computePhysicsContext` is unit-tested separately for abrupt-brake-release detection, throttle-rate sign, friction-limit flagging, and zero-input safety. |
+| `src/services/__tests__/coldPromptStructure.test.ts` | 22 | **DR-4** — `buildColdPrompt` includes the explicit "do not restate the symptom" directive, names every physics lever (weight transfer, friction circle, brake-release rate, throttle-application rate), populates them with real numbers from the telemetry window (different scenarios produce different prompts), demands a `Symptom: / Root Cause: / Fix:` output schema, demands the Root Cause cite a number, and adapts to skill level. Includes a snapshot test of the canonical missed-apex prompt so future drift is reviewable. `computePhysicsContext` is unit-tested separately for abrupt-brake-release detection, throttle-rate sign, friction-limit flagging, and zero-input safety. The `brakeReleasedInWindow` flag (audit-1 fix B4) is also tested here. |
+
+#### Audit-fix regression tests
+
+Two post-gate audits surfaced bugs that became regression tests. Each file is paired with one finding from the audit so a future regression has a named signal in CI.
+
+| File | Tests | Finding it locks down |
+|---|---:|---|
+| `src/services/__tests__/coachingService.safetyOverridePromotion.test.ts` | 3 | **Audit-1 B2** — when DR-6 safety override fires for a P1 BRAKE-class action at high speed, priority is promoted to P0 so the message bypasses the TimingGate's MID_CORNER blackout (instead of being silenced). Includes a control case that asserts P1 stays P1 below the speed threshold. |
+| `src/services/__tests__/coachingService.processFrameLatency.test.ts` | 5 | **Audit-1 B5 + Audit-2** — full HOT-path latency stats (entry → after `drainQueue`/listener callbacks). Includes a control with the buffer empty (count=0, no NaN), a 1000-frame p99 < 50ms assertion, an isolation test that humanization slowdown is reflected separately, and verification that the circular ring-buffer cap holds at 2000 samples. |
+
+#### Latency / timing test suite (9 files)
+
+Timing is the load-bearing non-functional property of the coach ("feedback 800ms late is worse than silence"). These tests target failure modes that correctness tests cannot catch.
+
+| File | Tests | What it proves |
+|---|---:|---|
+| `src/services/__tests__/coachingService.latency.test.ts` | 2 | HOT-path latency benchmark — 1000 frames, mean / p99 / max reported, p99 < 50ms. The control for DR-3. |
+| `src/services/__tests__/coachingService.burstLatency.test.ts` | 1 | Sustained 25 Hz burst over 250 frames (10 simulated seconds). No per-frame overshoot. Cumulative drift < 200ms. |
+| `src/services/__tests__/coachingService.concurrentLoad.test.ts` | 2 | HOT path is unaffected by an in-flight COLD path that takes 5 seconds to respond. |
+| `src/services/__tests__/coachingService.coldRecovery.test.ts` | 4 | After a `fetch` failure, the COLD path retries on the next eligible frame (within 2 frames / ≤ 80ms). |
+| `src/services/__tests__/coachingService.coldWarmCold.test.ts` | 2 | First Gemini call vs subsequent — slow cold-start (2s) does not slow down HOT path frames that fire in parallel. |
+| `src/services/__tests__/coachingService.networkJitter.test.ts` | 2 | Across 100 simulated runs with random network latency drawn from `[100, 300, 800, 2500, 5000]ms`, no HOT-path frame exceeds the 50ms p99 budget. |
+| `src/services/__tests__/timingGate.transitionLatency.test.ts` | 1 | TimingGate state-transition cost is sub-microsecond (<100µs / call across 10000 cycles). |
+| `src/services/__tests__/coachingQueue.staleExpiry.test.ts` | 4 | 3-second stale-message expiry boundary tested at millisecond precision (t=2999ms returned, t=3000ms rejected, t=3001ms rejected). |
+| `src/services/__tests__/feedforwardGeofence.timeToCorner.test.ts` | 4 | DR-1's promised cognitive headroom — for every Sonoma corner at 30 / 60 / 90 mph, `time_to_corner` at fire moment is ≥ 4.4s above 60 mph (4.5s minus 100ms frame-step discretization), ≥ 3.0s otherwise. |
+
+#### Robustness test suite (5 files)
+
+Failure modes the production code may encounter at the track that aren't latency-related: memory pressure, long sessions, listener fan-out, audio dispatch, and frame-stream pathology.
+
+| File | Tests | What it proves |
+|---|---:|---|
+| `src/services/__tests__/coachingService.memoryPressure.test.ts` | 2 | HOT-path stays under budget when the heap is being churned (100 KB throwaway allocations between every frame, 5000 frames). Compared against a control. |
+| `src/services/__tests__/coachingService.longSession.test.ts` | 1 | 1-hour simulated session (90000 frames) — no monotonic heap growth, no progressive p99 slowdown, ring buffers stay capped at 2000 samples. |
+| `src/services/__tests__/coachingService.listenerFanOut.test.ts` | 2 | HOT-path latency does not degrade with N listeners — `p99(100) / p99(1) < 10×`. Mid-frame subscribe/unsubscribe is exception-safe and bounded above (≤ 200 invocations between subscribe and unsubscribe events). |
+| `src/services/__tests__/coachingService.audioDispatch.test.ts` | 2 | A 1.5s async listener (simulating TTS dispatch) does NOT back-pressure `processFrame`. HOT-path p99 is unaffected by a slow async listener. |
+| `src/services/__tests__/coachingService.frameIntegrity.test.ts` | 4 | Duplicate frame, out-of-order frame, 250ms frame-drop gap, and malformed frame (NaN / undefined / out-of-range telemetry) are all handled without exceptions. The `isValidGps` gate keeps invalid GPS from producing FEEDFORWARD. |
+| `src/services/__tests__/coachingService.subsystemBreakdown.test.ts` | 2 | Per-subsystem p99 attribution (DriverModel, CornerPhaseDetector, decision matrix, queue, real humanization timings via the DR-3 ring buffer). Fingerprints the bottleneck so a regression has a named signal. |
+| `src/services/__tests__/coachingService.clusteredCorners.test.ts` | 4 | Heading-aware FEEDFORWARD on a synthetic 3-corner cluster — each corner emits while still ahead, with TTC ≥ 3.0s. Includes the heading-fallback case (no GPS history) and the behind-driver rejection case. |
 
 ### Run a specific test file
 
