@@ -13,7 +13,7 @@ export const SONOMA_TEST_TRACK: Track = {
     { id: 3, name: 'Sector 3', startDist: 2400, endDist: 3700 },
   ],
   corners: [
-    { id: 1, name: 'Turn 1', entryDist: 100, apexDist: 150, exitDist: 200, lat: 38.16180, lon: -122.45550, advice: 'Hard brake, late apex', entryLat: 38.16200, entryLon: -122.45500, targetSpeed: 55 },
+    { id: 1, name: 'Turn 1', entryDist: 100, apexDist: 150, exitDist: 200, lat: 38.16180, lon: -122.45550, advice: 'Hard brake, late apex', entryLat: 38.16200, entryLon: -122.45500, targetSpeed: 55, visualReference: 'Eyes up to the brake marker' },
     { id: 2, name: 'Turn 2', entryDist: 350, apexDist: 420, exitDist: 480, lat: 38.16120, lon: -122.45680, advice: 'Carry speed, gentle arc', entryLat: 38.16150, entryLon: -122.45620, targetSpeed: 70 },
     { id: 3, name: 'Turn 3', entryDist: 600, apexDist: 650, exitDist: 700, lat: 38.16050, lon: -122.45750, advice: 'Downhill entry, threshold brake', entryLat: 38.16080, entryLon: -122.45720, targetSpeed: 45 },
     { id: 7, name: 'Turn 7', entryDist: 1800, apexDist: 1870, exitDist: 1930, lat: 38.15950, lon: -122.45400, advice: 'Fast sweeper, commit to throttle', entryLat: 38.15970, entryLon: -122.45430, targetSpeed: 85, visualReference: 'Eyes up to the exit kerb — let the car run wide' },

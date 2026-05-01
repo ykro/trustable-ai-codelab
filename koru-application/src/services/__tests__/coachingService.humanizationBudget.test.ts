@@ -65,6 +65,84 @@ describe('CoachingService DR-3 humanization budget', () => {
     expect(p99).toBeLessThan(50);
   });
 
+  // ── Audit P2: N-of-M permanent fallback escalation ──────────
+  // The DR-3 single-frame sticky fallback bounces between humanized and raw
+  // forever if humanization is *consistently* slow. Under sustained slowness
+  // (>25% of the last 100 frames over budget), the service should latch into
+  // a permanent fallback for the rest of the session.
+  describe('Audit P2 — N-of-M permanent fallback', () => {
+    it('latches permanent fallback after >25% of the last 100 frames exceed budget', () => {
+      const f: TelemetryFrame = {
+        time: 0, latitude: 0, longitude: 0,
+        speed: 60, throttle: 70, brake: 0, gLat: 0.5, gLong: 0,
+      };
+
+      // Force 30 of the next 100 humanizeAction calls to take >50ms.
+      // 30/100 = 30% > 25% threshold → permanent fallback should latch
+      // by the time the 100th frame is observed.
+      let slowCallsRemaining = 30;
+      const original = (service as any).humanizeAction.bind(service);
+      (service as any).humanizeAction = (action: string, frm: TelemetryFrame) => {
+        if (slowCallsRemaining > 0) {
+          slowCallsRemaining--;
+          const start = performance.now();
+          while (performance.now() - start < 60) { /* spin > 50ms */ }
+        }
+        return original(action, frm);
+      };
+
+      // Drive enough calls for the breach window to fill and trip the threshold.
+      // The single-frame sticky fallback eats some calls without measuring,
+      // so allow a generous loop and exit early once permanent fallback engages.
+      for (let i = 0; i < 300; i++) {
+        (service as any).humanizeOrFallback('THROTTLE', f);
+        if (service.isHumanizationPermanentFallback()) break;
+      }
+
+      expect(service.isHumanizationPermanentFallback()).toBe(true);
+
+      // Subsequent emissions return the raw action label even when humanization
+      // is fast again (slowCallsRemaining was already exhausted).
+      const r = (service as any).humanizeOrFallback('COMMIT', f) as string;
+      expect(r).toBe('COMMIT');
+      const r2 = (service as any).humanizeOrFallback('THROTTLE', f) as string;
+      expect(r2).toBe('THROTTLE');
+
+      // resetHumanizationFallback() unlocks humanization for tests.
+      service.resetHumanizationFallback();
+      expect(service.isHumanizationPermanentFallback()).toBe(false);
+      const r3 = (service as any).humanizeOrFallback('THROTTLE', f) as string;
+      expect(r3).not.toBe('THROTTLE');
+      expect(r3.length).toBeGreaterThan(0);
+    });
+
+    it('does NOT latch permanent fallback when only a few frames breach the budget', () => {
+      const f: TelemetryFrame = {
+        time: 0, latitude: 0, longitude: 0,
+        speed: 60, throttle: 70, brake: 0, gLat: 0.5, gLong: 0,
+      };
+
+      // 5 breaches over 100+ frames = 5% < 25% — should NOT latch.
+      let slowCallsRemaining = 5;
+      const original = (service as any).humanizeAction.bind(service);
+      (service as any).humanizeAction = (action: string, frm: TelemetryFrame) => {
+        if (slowCallsRemaining > 0) {
+          slowCallsRemaining--;
+          const start = performance.now();
+          while (performance.now() - start < 60) { /* spin > 50ms */ }
+        }
+        return original(action, frm);
+      };
+
+      for (let i = 0; i < 200; i++) {
+        (service as any).humanizeOrFallback('THROTTLE', f);
+      }
+
+      expect(service.isHumanizationPermanentFallback()).toBe(false);
+      service.resetHumanizationFallback();
+    });
+  });
+
   it('falls back to raw action label on the next call after a budget breach', () => {
     // Test the humanizeOrFallback unit directly — the queue/cooldown machinery
     // around it is exercised by other tests, and using P0 actions here would

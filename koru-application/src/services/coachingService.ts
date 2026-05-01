@@ -20,9 +20,12 @@ const HUMANIZATION_BUDGET_MS = 50;
  *  short authoritative imperative. Frame speed is in mph (see TelemetryFrame). */
 const HIGH_SPEED_BRAKE_THRESHOLD_MPH = 70;
 
-/** Actions that are "BRAKE-class" for the high-speed safety override. */
+/** Actions that are "BRAKE-class" for the high-speed safety override.
+ *  Excludes TRAIL_BRAKE: trail braking is a deliberate technique, not an
+ *  emergency. Treating it as "Brake hard!" at speed would be coaching the
+ *  driver out of a correct input. (Audit B2.) */
 const BRAKE_CLASS_ACTIONS: ReadonlySet<CoachAction> = new Set<CoachAction>([
-  'BRAKE', 'THRESHOLD', 'SPIKE_BRAKE', 'TRAIL_BRAKE',
+  'BRAKE', 'THRESHOLD', 'SPIKE_BRAKE',
 ]);
 
 /** Terse, authoritative imperatives for safety-override emissions.
@@ -34,7 +37,6 @@ const SAFETY_OVERRIDE_TEXT: Partial<Record<CoachAction, string>> = {
   BRAKE: 'Brake hard!',
   THRESHOLD: 'Brake hard!',
   SPIKE_BRAKE: 'Brake hard!',
-  TRAIL_BRAKE: 'Brake hard!',
 };
 
 /** Map actions to priority levels (module-level Map avoids per-call array allocations).
@@ -64,15 +66,23 @@ type CoachingCallback = (msg: CoachingDecision) => void;
 export const FEEDFORWARD_LEAD_S = 3.0;
 export const TTS_BUDGET_S = 1.5;
 export const MIN_TRIGGER_M = 40;
+/** Audit B3: upper cap on the velocity-scaled geofence. Without this, the
+ *  trigger grows unbounded with speed — at 140 mph the unclamped value is
+ *  ~280m, which overlaps adjacent corners in dense complexes (Sonoma T2/T3),
+ *  firing FEEDFORWARD for the next corner while the driver is still in the
+ *  current one. 250m gives a generous lead at any realistic track speed
+ *  without bleeding across complex sections. */
+export const MAX_TRIGGER_M = 250;
 export const MPH_TO_MPS = 0.44704;
 
 /** Velocity-scaled FEEDFORWARD geofence radius (DR-1).
- *  Returns 0 when stationary so the path does not fire at idle. */
+ *  Returns 0 when stationary so the path does not fire at idle.
+ *  Clamped to [MIN_TRIGGER_M, MAX_TRIGGER_M] at the bounds. */
 export function getTriggerDistance(speedMph: number): number {
   if (!Number.isFinite(speedMph) || speedMph <= 0) return 0;
   const vMps = speedMph * MPH_TO_MPS;
   const scaled = vMps * (FEEDFORWARD_LEAD_S + TTS_BUDGET_S);
-  return Math.max(MIN_TRIGGER_M, scaled);
+  return Math.min(MAX_TRIGGER_M, Math.max(MIN_TRIGGER_M, scaled));
 }
 
 /** Build the FEEDFORWARD message text for a corner (DR-5).
@@ -138,6 +148,18 @@ export class CoachingService {
   private humanizationFallbackArmed = false;
   private humanizationBudgetMs = HUMANIZATION_BUDGET_MS;
 
+  // ── Audit P2: N-of-M permanent fallback escalation ──────
+  // The DR-3 single-frame sticky fallback bounces between raw and humanized
+  // when humanization is *consistently* slow. Track a bounded window of recent
+  // breach booleans; if the breach rate over the window exceeds the threshold,
+  // permanently disable humanization for the rest of the session.
+  private static readonly HUMANIZATION_BREACH_WINDOW = 100;
+  private static readonly HUMANIZATION_BREACH_THRESHOLD = 0.25;
+  private humanizationBreachWindow: boolean[] = [];
+  private humanizationBreachCount = 0;
+  private humanizationPermanentFallback = false;
+  private humanizationPermanentFallbackWarned = false;
+
   // ── DR-6: Safety-override threshold (configurable) ──────
   private highSpeedBrakeThresholdMph = HIGH_SPEED_BRAKE_THRESHOLD_MPH;
 
@@ -174,6 +196,21 @@ export class CoachingService {
   setHumanizationBudgetMs(ms: number): void { this.humanizationBudgetMs = ms; }
   setHighSpeedBrakeThresholdMph(mph: number): void { this.highSpeedBrakeThresholdMph = mph; }
 
+  /** Audit P2: true once the N-of-M breach threshold is crossed. From this
+   *  point forward, all hot-path emissions are raw action labels — humanization
+   *  is permanently disabled for the rest of the session. */
+  isHumanizationPermanentFallback(): boolean { return this.humanizationPermanentFallback; }
+
+  /** Audit P2: testing hook. Resets the permanent-fallback flag and clears
+   *  the breach window so a test can simulate a fresh session. */
+  resetHumanizationFallback(): void {
+    this.humanizationPermanentFallback = false;
+    this.humanizationPermanentFallbackWarned = false;
+    this.humanizationBreachWindow = [];
+    this.humanizationBreachCount = 0;
+    this.humanizationFallbackArmed = false;
+  }
+
   /**
    * DR-6: Should we bypass humanization and emit a terse safety imperative?
    *  (a) OVERSTEER_RECOVERY — always (high-slip, regardless of speed).
@@ -199,6 +236,11 @@ export class CoachingService {
     if (this.shouldBypassHumanization(action, frame)) {
       return SAFETY_OVERRIDE_TEXT[action] ?? action;
     }
+    // Audit P2: once permanent fallback is engaged, never humanize again
+    // for the rest of the session — humanization is consistently too slow.
+    if (this.humanizationPermanentFallback) {
+      return action;
+    }
     // DR-3 fallback: prior call breached the budget → emit raw label this once.
     if (this.humanizationFallbackArmed) {
       this.humanizationFallbackArmed = false;
@@ -214,12 +256,40 @@ export class CoachingService {
     }
     this.humanizationLatencySamples.push(elapsed);
 
-    if (elapsed > this.humanizationBudgetMs) {
+    const breached = elapsed > this.humanizationBudgetMs;
+    if (breached) {
       this.humanizationFallbackArmed = true;
       if (import.meta.env.DEV) {
         console.warn(
           `[humanizeAction] budget breach: ${elapsed.toFixed(2)}ms > ${this.humanizationBudgetMs}ms ` +
           `(action=${action}). Next emission will use raw label.`,
+        );
+      }
+    }
+
+    // Audit P2: maintain a sliding window of breach booleans. Once breach
+    // rate over the last HUMANIZATION_BREACH_WINDOW frames exceeds
+    // HUMANIZATION_BREACH_THRESHOLD, escalate to permanent fallback.
+    this.humanizationBreachWindow.push(breached);
+    if (breached) this.humanizationBreachCount++;
+    if (this.humanizationBreachWindow.length > CoachingService.HUMANIZATION_BREACH_WINDOW) {
+      const dropped = this.humanizationBreachWindow.shift();
+      if (dropped) this.humanizationBreachCount--;
+    }
+    if (
+      !this.humanizationPermanentFallback &&
+      this.humanizationBreachWindow.length >= CoachingService.HUMANIZATION_BREACH_WINDOW &&
+      this.humanizationBreachCount >
+        CoachingService.HUMANIZATION_BREACH_WINDOW * CoachingService.HUMANIZATION_BREACH_THRESHOLD
+    ) {
+      this.humanizationPermanentFallback = true;
+      if (!this.humanizationPermanentFallbackWarned) {
+        this.humanizationPermanentFallbackWarned = true;
+        console.warn(
+          `[humanizeAction] permanent fallback engaged: ` +
+          `${this.humanizationBreachCount}/${this.humanizationBreachWindow.length} frames ` +
+          `exceeded ${this.humanizationBudgetMs}ms budget. ` +
+          `All emissions will use raw action labels for the rest of the session.`,
         );
       }
     }
@@ -382,8 +452,18 @@ export class CoachingService {
         // Skip repeats
         if (rule.action === this.lastHotAction) continue;
 
-        const priority = this.boostForGoals(rule.action, actionPriority(rule.action));
+        let priority = this.boostForGoals(rule.action, actionPriority(rule.action));
         this.lastHotAction = rule.action;
+
+        // Audit B2: when DR-6 safety override applies to a non-P0 action
+        // (e.g. THRESHOLD, SPIKE_BRAKE at >70 mph), promote priority to P0
+        // so the message bypasses the TimingGate MID_CORNER blackout. The
+        // text is already the override imperative; without P0 promotion the
+        // override imperative would be silenced mid-corner — exactly the
+        // moment a panicked driver needs it.
+        if (priority !== 0 && this.shouldBypassHumanization(rule.action, frame)) {
+          priority = 0;
+        }
 
         const decision: CoachingDecision = {
           path: 'hot',

@@ -4,10 +4,12 @@ import {
   FEEDFORWARD_LEAD_S,
   TTS_BUDGET_S,
   MIN_TRIGGER_M,
+  MAX_TRIGGER_M,
   MPH_TO_MPS,
   getTriggerDistance,
   buildFeedforwardText,
 } from '../coachingService';
+import { SONOMA_TEST_TRACK } from '../../__tests__/fixtures/sonomaTrackData';
 import type { CoachingDecision, TelemetryFrame, Corner, Track } from '../../types';
 
 // ── Helpers ────────────────────────────────────────────────
@@ -70,6 +72,17 @@ describe('DR-1 getTriggerDistance', () => {
   it('clamps to MIN_TRIGGER_M floor at very low (non-zero) speed', () => {
     // 5 mph * 0.44704 * 4.5 ≈ 10m — well below the 40m floor.
     expect(getTriggerDistance(5)).toBe(MIN_TRIGGER_M);
+  });
+
+  it('caps at MAX_TRIGGER_M at very high speed (Audit B3)', () => {
+    // 140 mph * 0.44704 * 4.5 ≈ 281m without the cap. The cap clamps to 250m
+    // so adjacent corners in dense complexes (Sonoma T2/T3) don't overlap.
+    expect(getTriggerDistance(140)).toBe(MAX_TRIGGER_M);
+    // Sanity: very high speed also stays clamped.
+    expect(getTriggerDistance(200)).toBe(MAX_TRIGGER_M);
+    // Just below the cap, the value is still scaled (not clamped).
+    // 120 mph * 0.44704 * 4.5 ≈ 241m, below the 250m cap.
+    expect(getTriggerDistance(120)).toBeLessThan(MAX_TRIGGER_M);
   });
 
   it('scales linearly with velocity at speed', () => {
@@ -235,6 +248,24 @@ describe('DR-5 FEEDFORWARD message — vision cue integration', () => {
     expect(ff).toBeDefined();
     expect(ff!.text).toContain('Eyes up to the bridge tire mark');
     expect(ff!.text).toContain('Stay committed through the kink');
+  });
+
+  // Audit P1: T1 must have a visualReference. T1 is the most consequential
+  // braking zone for a beginner at Sonoma, so the eyes-up cue is required.
+  // Parametrized over the Sonoma corners that ship with a vision cue.
+  describe.each([
+    { id: 1,  name: 'Turn 1' },
+    { id: 7,  name: 'Turn 7' },
+    { id: 10, name: 'Turn 10' },
+    { id: 11, name: 'Turn 11' },
+  ])('SONOMA_TEST_TRACK $name has a visualReference', ({ id, name }) => {
+    it(`Corner id=${id} (${name}) defines a non-empty visualReference`, () => {
+      const corner = SONOMA_TEST_TRACK.corners.find(c => c.id === id);
+      expect(corner, `Corner id=${id} missing from fixture`).toBeDefined();
+      expect(corner!.name).toBe(name);
+      expect(corner!.visualReference).toBeDefined();
+      expect(corner!.visualReference!.trim().length).toBeGreaterThan(0);
+    });
   });
 
   it('emits the unchanged pedal/wheel message for corners without visualReference', () => {
