@@ -119,9 +119,14 @@ export class CoachingService {
   private lastColdTime = 0;
   private lastHotAction: CoachAction | null = null;
   private lastCorner: Corner | null = null;
-  // Previous-frame GPS, used to derive heading for the heading-aware feedforward
-  // predicate. Reset on setTrack so a fresh session can't reuse a stale heading.
-  private lastFeedforwardGps: { lat: number; lon: number } | null = null;
+  // Previous-frame GPS + timestamp, used to derive heading for the heading-aware
+  // feedforward predicate. Reset on setTrack so a fresh session can't reuse a
+  // stale heading. Audit-3 B-2: include `time` so the heading derivation can
+  // reject pairs >500ms apart (GPS dropout under tree cover or in shaded
+  // approaches like Sonoma T10) — a wrong heading from a stale GPS pair could
+  // fire FEEDFORWARD for the wrong corner.
+  private lastFeedforwardGps: { lat: number; lon: number; time: number } | null = null;
+  private static readonly FEEDFORWARD_GPS_STALE_S = 0.5;
   private coldCooldownMs = 15000;
   private apiKey: string | null = null;
 
@@ -165,6 +170,11 @@ export class CoachingService {
    *  separate from `humanizationLatencySamples`, which only times the
    *  humanizeAction call — humanization is one component of processFrame. */
   private processFrameLatencySamples: number[] = [];
+  /** Audit-3 A-3: absolute session-wide frame counter. The ring buffer caps
+   *  at LATENCY_SAMPLE_CAP (2000), so a long session can't tell from `count`
+   *  alone whether 2000 frames or 50000 frames have been processed. This
+   *  field is the true count, exposed alongside `count` in the stats getter. */
+  private processFrameCount = 0;
   /** Sticky for ONE emission after a budget breach: next hot-path emission
    *  uses the raw action label, then this resets. Single-frame stickiness keeps
    *  the recovery cheap without permanently degrading coaching quality. */
@@ -225,24 +235,33 @@ export class CoachingService {
    *  is permanently disabled for the rest of the session. */
   isHumanizationPermanentFallback(): boolean { return this.humanizationPermanentFallback; }
 
-  /** Audit P2: testing hook. Resets the permanent-fallback flag and clears
-   *  the breach window so a test can simulate a fresh session. */
+  /** Audit P2: testing hook. Resets the permanent-fallback flag, clears
+   *  the breach window, and zeroes the humanization latency buffer + head
+   *  pointer so a test can simulate a genuinely fresh session. (Audit-3 A-1:
+   *  the previous version left stale samples in the ring buffer with a
+   *  non-zero head, so "fresh session" wasn't actually fresh.) */
   resetHumanizationFallback(): void {
     this.humanizationPermanentFallback = false;
     this.humanizationPermanentFallbackWarned = false;
     this.humanizationBreachWindow = [];
     this.humanizationBreachCount = 0;
     this.humanizationFallbackArmed = false;
+    this.humanizationLatencySamples = [];
+    this.latencyBufferHead.humanization = 0;
   }
 
   // ── B5 public API: full processFrame HOT-path latency stats ───
   /** Stats over the synchronous portion of processFrame (the HOT path).
-   *  Returns zeros + count:0 when the buffer is empty (e.g. before any
-   *  frame has been processed) so callers don't need to special-case it. */
-  getProcessFrameLatencyStats(): { mean: number; p50: number; p99: number; max: number; count: number } {
+   *  - `count` = number of samples currently in the ring buffer (capped at
+   *    LATENCY_SAMPLE_CAP). Useful for percentile interpretation.
+   *  - `totalFrames` = absolute number of frames processed this session
+   *    (audit-3 A-3). Tells the caller whether the buffer has wrapped.
+   *  Returns zeros when the buffer is empty (e.g. before any frame has
+   *  been processed) so callers don't need to special-case it. */
+  getProcessFrameLatencyStats(): { mean: number; p50: number; p99: number; max: number; count: number; totalFrames: number } {
     const s = this.processFrameLatencySamples;
     const count = s.length;
-    if (count === 0) return { mean: 0, p50: 0, p99: 0, max: 0, count: 0 };
+    if (count === 0) return { mean: 0, p50: 0, p99: 0, max: 0, count: 0, totalFrames: this.processFrameCount };
     // Sort a copy — we don't want to disturb insertion order in the live buffer.
     const sorted = s.slice().sort((a, b) => a - b);
     const sum = sorted.reduce((a, b) => a + b, 0);
@@ -252,14 +271,16 @@ export class CoachingService {
       p99: sorted[Math.min(count - 1, Math.floor(count * 0.99))],
       max: sorted[count - 1],
       count,
+      totalFrames: this.processFrameCount,
     };
   }
 
-  /** Clears the processFrame latency ring buffer. Independent from the
-   *  humanization buffer — they are two different measurements. */
+  /** Clears the processFrame latency ring buffer and the absolute session
+   *  frame counter. Independent from the humanization buffer. */
   resetProcessFrameLatencyStats(): void {
     this.processFrameLatencySamples = [];
     this.latencyBufferHead.processFrame = 0;
+    this.processFrameCount = 0;
   }
 
   /**
@@ -449,6 +470,7 @@ export class CoachingService {
     // Anything truly async (the awaited fetch inside runColdPath) is excluded.
     const hotPathElapsed = performance.now() - hotPathStart;
     this.pushLatencySample(this.processFrameLatencySamples, hotPathElapsed);
+    this.processFrameCount += 1;
   }
 
   /** O(1) bounded ring-buffer push.
@@ -962,17 +984,23 @@ export class CoachingService {
     // Derive heading from the previous valid GPS sample. If unavailable (first
     // frame, GPS dropout, or essentially-stationary), heading is null and we
     // fall back to nearest-only inside findNearestCornerWithinTriggerDistance.
+    // Audit-3 B-2: also reject pairs >0.5s apart (GPS dropout) — a stale pair
+    // produces a wrong heading that could fire FEEDFORWARD for the wrong corner.
     const prev = this.lastFeedforwardGps;
     let heading: number | null = null;
     if (prev) {
-      // Require at least 0.5m of movement to derive a stable heading. Below
-      // that, GPS noise dominates and the bearing is meaningless.
-      const moved = haversineDistance(prev.lat, prev.lon, frame.latitude, frame.longitude);
-      if (moved >= 0.5) {
-        heading = calculateHeading(prev.lat, prev.lon, frame.latitude, frame.longitude);
+      const ageS = frame.time - prev.time;
+      const tooStale = ageS > CoachingService.FEEDFORWARD_GPS_STALE_S || ageS < 0;
+      if (!tooStale) {
+        // Require at least 0.5m of movement to derive a stable heading. Below
+        // that, GPS noise dominates and the bearing is meaningless.
+        const moved = haversineDistance(prev.lat, prev.lon, frame.latitude, frame.longitude);
+        if (moved >= 0.5) {
+          heading = calculateHeading(prev.lat, prev.lon, frame.latitude, frame.longitude);
+        }
       }
     }
-    this.lastFeedforwardGps = { lat: frame.latitude, lon: frame.longitude };
+    this.lastFeedforwardGps = { lat: frame.latitude, lon: frame.longitude, time: frame.time };
 
     const nearest = this.findNearestCornerWithinTriggerDistance(
       frame.latitude, frame.longitude, this.track.corners, triggerDistance, heading,
