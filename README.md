@@ -13,6 +13,8 @@ This system tells you in real time how to adapt and fix it, adjusted to your ski
 
 - [April 29 Technical Gate — Data Reasoning Checkpoint](#april-29-technical-gate--data-reasoning-checkpoint)
   - [Domain Expertise Layer](#domain-expertise-layer)
+- [Post-Gate Feedback (April 29 review)](#post-gate-feedback-april-29-review)
+- [Sonoma Field Test — Validation Plan (May 23, 2026)](#sonoma-field-test--validation-plan-may-23-2026)
 - [Roadmap](#roadmap)
   - [Data Reasoning](#data-reasoning)
   - [Other pods (Edge / AGY / UX) — see user-stories.md](#edge--telemetry-agy-pipeline-ux--frontend)
@@ -175,6 +177,69 @@ The Googler review returned **CONDITIONAL PASS**, with three categories of follo
 ### What the reviewer flagged as portable today (no action — recognition)
 
 The HOT/COLD/FEEDFORWARD tri-path routing engine, the P0 Safety Bypass mechanism, and the latency-budget monitoring pattern were called out as "gold-standard patterns for any edge-AI system." These are reflected in [`docs/learnings-real-time-data-reasoning.md`](docs/learnings-real-time-data-reasoning.md) for cross-industry portability.
+
+---
+
+## Sonoma Field Test — Validation Plan (May 23, 2026)
+
+The April 29 review left us with six conditional-pass items (DR-1..6). All six are implemented on the `data-reasoning` branch and proved by unit tests (134 passing across 15 files — see [`docs/data-reasoning.md`](docs/data-reasoning.md#test-suite-layout)). The May 23 field test at Sonoma Raceway is where we verify the same behavior **on the car, at speed, in the helmet** — not in a unit test harness.
+
+This section is the test plan: what runs at Sonoma, who runs it, what counts as pass/fail, and how each piece of feedback is checked.
+
+### Test format (every session)
+
+- **Driver:** Beginner driver, 2024 Subaru GR86 (automatic), Pixel 10 in cradle, Pixel Earbuds, RaceBox Mini + OBDLink MX+ wired up.
+- **Engineer:** One person in the passenger seat with a laptop running session capture, watching a live HUD and the SSE log.
+- **Session shape:** 20-minute on-track stint, 5–8 laps depending on traffic. Three planned stints across the day so we can re-run after fixes.
+- **Recording:** Full telemetry captured to JSON via the AGY pipeline (or local file if AGY-2 is not yet shipped). Coaching events captured with timestamps. In-car GoPro for audio sanity-check (did the right phrase actually reach the helmet on time?).
+- **Wet-lap procedure for safety override (DR-6):** the spin/high-slip cases are exercised on the **skid pad**, not on the racing line. We don't engineer spins at speed.
+
+### Success criteria (overall)
+
+A field test counts as **pass** if all of the following hold across at least one full 20-minute stint:
+
+1. Zero hot-path coaching events delivered later than 500 ms after the trigger frame (measured via `event.timestamp` to `audio.firstSampleAt`).
+2. Zero P0 safety alerts dropped, regardless of whether the COLD path was reachable.
+3. Driver self-report: "I had time to act on the corner advice before the braking zone" (1–5 Likert, target ≥ 4 on average across corners).
+4. No coaching delivered during MID_CORNER or APEX phases (verified by replaying the log against the TimingGate state).
+
+### How each feedback item is verified at the track
+
+| Feedback | What we measure | Pass criterion | How |
+|---|---|---|---|
+| **DR-1** Dynamic FEEDFORWARD geofence | Driver's `Time-to-corner` at the moment FEEDFORWARD fires, by corner. | At Sonoma's three highest-speed approaches (T2, T7 entry, T10), `time_to_corner ≥ 4.5 s` (3.0 s lead + 1.5 s TTS) on every fire across the stint. Slower corners (T11, T7 apex) accept ≥ 3.0 s. | Replay the captured `coachingEvents.json` against the GPS log; compute distance-to-corner at fire-time and divide by speed. Plotted alongside the static-150 m baseline for direct comparison. |
+| **DR-2** P0 safety bypass under fault | P0 latency when the COLD path is artificially degraded. | P0 (`OVERSTEER_RECOVERY`) emits within 100 ms of the trigger frame whether COLD is healthy, throttled, or unreachable. | Engineer toggles three modes mid-session via a debug control: `cold:healthy`, `cold:throttled-5s`, `cold:offline`. We trigger oversteer-recovery on the skid pad in each mode and check the log. Mirrors the unit test `coachingService.p0Stress.test.ts` against real audio. |
+| **DR-3** Humanization ≤ 50 ms | Per-frame humanization wall-clock time on the Pixel 10. | p99 across the full stint ≤ 50 ms; if any frame exceeds, the next emission is the raw label (the fallback is itself the safety net). | Production code already records the timing in a 2000-frame ring buffer (see DR-3 implementation). Engineer dumps the buffer at session end via a debug control and we plot the histogram. |
+| **DR-4** "Why over What" COLD output | Form of the Gemini response. | At least 80% of COLD responses follow the `Symptom: / Root Cause: / Fix:` schema, and the Root Cause cites a number from the physics context. | Engineer reviews the captured COLD prompt+response pairs after each stint. Pass = at-a-glance form check + grep for "Root Cause:" in 80%+ of responses. The 20% slack accounts for Gemini occasionally drifting; if we see >40% drift, the prompt needs another pass. |
+| **DR-5** Eyes-up vision coaching | Driver self-report on the three tagged corners (T7, T10, T11). | Driver reports "I knew where to look before the corner" on ≥ 2 of the 3 tagged corners during a debrief. | Post-stint debrief, structured questions per corner. We do *not* prompt the driver with "did the eyes-up cue help?" — we ask "where were you looking on the approach to T10?" first, and only if their description matches the cued reference do we count it as the cue working. |
+| **DR-6** Humanization safety override | Output style during forced-fault skid-pad runs. | Under engineered oversteer on the skid pad, the audio output is the raw imperative (e.g. "Both feet in!") with no persona inflection. Under controlled brake events at 70+ mph (using a long approach to a marked cone), BRAKE-class output is also raw. | Skid pad: induce mild oversteer; record audio, transcribe, compare to the override map. Brake test: 70 mph + hard braking into a cone, 3 repetitions, all should fire raw imperative. Cooldown lap to reset between attempts. |
+
+### What we are *not* validating at Sonoma
+
+- **DR-7 (abstract geofence triggers)** — explicitly out of scope for May 23. It is a post-Sonoma refactor with no behavioral change required.
+- **AGY-1 generic schema** — owned by Mike + Austin. If their generic schema is shipped before May 23 we capture sessions with it; otherwise we capture to local JSON and migrate offline.
+- **UX-2 Session Initialization module** — owned by Rabimba. If it ships, we use it for goal entry. If not, we set goals manually via a fallback form.
+
+### Failure → fix loop
+
+If any pass criterion fails on the first stint, we have two more stints across the day. The flow is:
+
+1. Pull the log onto the engineer laptop in the paddock between stints.
+2. Identify the failing frames (we have the timestamp from the criterion).
+3. Re-run the relevant unit test against the captured frame to see if it would have caught the bug. If yes — the test is wrong / not strict enough; tighten it. If no — write the missing test before changing production code.
+4. Patch on the spot if the fix is small (config tweak, threshold change). Defer to a follow-up commit if not.
+5. Re-deploy to the Pixel 10 and run the next stint.
+
+This is the same discipline the unit suite enforces (see [`docs/data-reasoning.md` → Test discipline](docs/data-reasoning.md#test-discipline--how-new-tests-get-added)). The goal is that nothing fixed at Sonoma stays fixed *only* at Sonoma — every track-side patch lands as a new test before the day ends.
+
+### Artifacts produced
+
+By the end of May 23 we expect:
+
+- 3 × full-stint session captures (telemetry + coaching events + audio).
+- A markdown debrief of pass/fail per criterion with the supporting plot or grep.
+- A list of new test cases derived from any frame that surprised us — to be added to the suite the next day.
+- An updated `docs/data-reasoning.md` Test Suite section reflecting the new test count.
 
 ---
 
